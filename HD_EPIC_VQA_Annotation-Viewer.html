@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HD-EPIC Annotation Viewer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* --- Top bar --- */
+  #topbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #1a1a1a; border-bottom: 1px solid #333; flex-shrink: 0; }
+  #topbar h1 { font-size: 14px; font-weight: 600; color: #aaa; white-space: nowrap; }
+  .file-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; white-space: nowrap; }
+  .file-btn:hover { background: #2a2a2a; border-color: #666; }
+  #video-name { font-size: 12px; color: #666; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #csv-name { font-size: 12px; color: #666; }
+  #stats { font-size: 11px; color: #555; white-space: nowrap; }
+
+  /* --- Main layout --- */
+  #main { display: flex; flex: 1; overflow: hidden; }
+
+  /* --- Video area --- */
+  #video-panel { flex: 0 0 50%; display: flex; flex-direction: column; background: #090909; min-width: 0; min-height: 0; }
+  #video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #090909; position: relative; padding: 0; overflow: hidden; min-height: 0; }
+  video { width: 100%; height: auto; max-width: 100%; max-height: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; }
+  #drop-hint { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 8px; color: #444; font-size: 14px; pointer-events: none; }
+  #drop-hint .big { font-size: 36px; }
+
+  /* --- Timeline --- */
+  #timeline-wrap { flex-shrink: 0; background: #151515; border-top: 1px solid #2a2a2a; padding: 6px 12px 8px; }
+  #timeline-track { position: relative; height: 28px; background: #1e1e1e; border-radius: 4px; cursor: pointer; overflow: hidden; }
+  #timeline-progress { position: absolute; top: 0; left: 0; height: 100%; background: rgba(255,255,255,0.05); pointer-events: none; }
+  #timeline-segments { position: absolute; top: 4px; left: 0; height: 20px; width: 100%; pointer-events: none; }
+  #timeline-cursor { position: absolute; top: 0; width: 2px; background: #fff; height: 100%; pointer-events: none; }
+  #time-labels { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 4px; }
+
+  /* --- Annotation panel --- */
+  #annot-panel { flex: 0 0 50%; min-width: 0; width: auto; display: flex; flex-direction: column; background: #141414; border-left: 1px solid #2a2a2a; min-height: 0; }
+  #annot-header { padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 12px; color: #888; font-weight: 500; }
+  #annot-list {
+    --caption-size-base: clamp(0.95rem, 1.05vw, 1.25rem);
+    --caption-size-active: clamp(1.2rem, 1.55vw, 1.65rem);
+    --tag-size-base: 0.62em;
+    --tag-size-active: 0.74em;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+  }
+  .annot-item {
+    font-size: var(--caption-size-base);
+    padding: 8px 14px;
+    border-bottom: 1px solid #1e1e1e;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.15s;
+  }
+  .annot-item:hover { background: #1e1e1e; }
+  .annot-item.active {
+    font-size: var(--caption-size-active);
+    background: #1e2a1e;
+    border-left: 3px solid #4ade80;
+    padding-left: 11px;
+    transform: scale(1.01);
+  }
+  .annot-item.active .annot-text { color: #b6f7c6; font-weight: 600; }
+  .annot-time {
+    font-size: 0.72em;
+    color: #6f6f6f;
+    opacity: 0.82;
+    margin-bottom: 0.35em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+  }
+  .annot-text {
+    font-size: 1em;
+    color: #ccc;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .annot-spacer { width: 100%; pointer-events: none; }
+  .annot-tags { margin-top: 6px; }
+  .tag-v { display: inline-block; background: #1a2e20; color: #4ade80; border-radius: 4px; padding: 0.18em 0.58em; font-size: var(--tag-size-base); line-height: 1.2; margin-right: 5px; }
+  .tag-n { display: inline-block; background: #1a2038; color: #60a5fa; border-radius: 4px; padding: 0.18em 0.58em; font-size: var(--tag-size-base); line-height: 1.2; }
+  .annot-item.active .tag-v,
+  .annot-item.active .tag-n { font-size: var(--tag-size-active); }
+
+  /* --- Search --- */
+  #search-wrap { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; }
+  #search { width: 100%; padding: 5px 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; color: #eee; font-size: 12px; }
+  #search::placeholder { color: #555; }
+  #search:focus { outline: none; border-color: #555; }
+
+  /* Scrollbar */
+  #annot-list::-webkit-scrollbar { width: 4px; }
+  #annot-list::-webkit-scrollbar-track { background: transparent; }
+  #annot-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+  @media (max-width: 1100px) {
+    #video-panel { flex-basis: 50%; }
+    #annot-panel { flex-basis: 50%; }
+  }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>HD-EPIC Viewer</h1>
+  <button class="file-btn" onclick="document.getElementById('video-input').click()">Load video</button>
+  <input type="file" id="video-input" accept="video/*" style="display:none">
+  <span id="video-name">no video loaded</span>
+  <button class="file-btn" onclick="document.getElementById('annotations-input').click()">Load annotations (.pkl/.csv)</button>
+  <input type="file" id="annotations-input" accept=".pkl,.pickle,.csv,application/octet-stream,text/csv" style="display:none">
+  <span id="csv-name">no annotations loaded</span>
+  <span id="stats"></span>
+</div>
+
+<div id="main">
+  <div id="video-panel">
+    <div id="video-wrap">
+      <div id="drop-hint">
+        <span class="big">&#9654;</span>
+        <span>Drop a video file here, or use "Load video"</span>
+        <span style="font-size:12px;color:#333">Then load global narrations (.pkl/.csv)</span>
+      </div>
+      <video id="vid" controls></video>
+    </div>
+    <div id="timeline-wrap">
+      <div id="timeline-track">
+        <div id="timeline-progress"></div>
+        <svg id="timeline-segments" preserveAspectRatio="none"></svg>
+        <div id="timeline-cursor"></div>
+      </div>
+      <div id="time-labels">
+        <span id="t-start">0:00</span>
+        <span id="t-cur">0:00</span>
+        <span id="t-end">0:00</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="annot-panel">
+    <div id="annot-header">Annotations</div>
+    <div id="search-wrap">
+      <input type="text" id="search" placeholder="Search narrations…">
+    </div>
+    <div id="annot-list"></div>
+  </div>
+</div>
+
+<script>
+const vid = document.getElementById('vid');
+const dropHint = document.getElementById('drop-hint');
+const timelineTrack = document.getElementById('timeline-track');
+const timelineSvg = document.getElementById('timeline-segments');
+const cursor = document.getElementById('timeline-cursor');
+const progress = document.getElementById('timeline-progress');
+const annotList = document.getElementById('annot-list');
+const searchInput = document.getElementById('search');
+const tStart = document.getElementById('t-start');
+const tCur = document.getElementById('t-cur');
+const tEnd = document.getElementById('t-end');
+
+let allAnnotations = [];
+let annotations = [];
+let filteredAnnotations = [];
+let activeIdx = -1;
+let currentVideoId = '';
+
+let pyodide = null;
+let pyodideInitPromise = null;
+
+function setStatus(message) {
+  document.getElementById('stats').textContent = message;
+}
+
+// ---- Utilities ----
+function parseTime(s) {
+  if (typeof s === 'number') return Number.isFinite(s) ? s : 0;
+  if (!s) return 0;
+  s = s.trim();
+  // HH:MM:SS.mmm or HH:MM:SS:FF (frames) or seconds as float
+  const parts = s.split(':');
+  if (parts.length === 3) {
+    const h = parseFloat(parts[0]), m = parseFloat(parts[1]), sec = parseFloat(parts[2]);
+    return h * 3600 + m * 60 + sec;
+  } else if (parts.length === 2) {
+    return parseFloat(parts[0]) * 60 + parseFloat(parts[1]);
+  }
+  return parseFloat(s) || 0;
+}
+
+function fmtTime(s, showMs = false) {
+  const totalMs = Math.max(0, Math.round(Number(s || 0) * 1000));
+  const h = Math.floor(totalMs / 3600000);
+  const m = Math.floor((totalMs % 3600000) / 60000);
+  const sec = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+
+  if (showMs) {
+    if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+    return `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+  }
+
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+  return `${m}:${String(sec).padStart(2,'0')}`;
+}
+
+function fmtCaptionMeta(start, stop) {
+  const safeStart = Math.max(0, Number(start || 0));
+  const safeStop = Math.max(safeStart, Number(stop || safeStart));
+  const duration = safeStop - safeStart;
+  return `${fmtTime(safeStart, true)} → ${fmtTime(safeStop, true)} (+${duration.toFixed(3)}s)`;
+}
+
+function updateCaptionSpacers() {
+  const spacerSize = Math.max(0, Math.floor(annotList.clientHeight / 2));
+  annotList.querySelectorAll('.annot-spacer').forEach(spacer => {
+    spacer.style.height = `${spacerSize}px`;
+  });
+}
+
+function scrollActiveItemToCenter(item) {
+  const container = annotList;
+  const containerCenter = container.clientHeight / 2;
+
+  // Let first/last captions center correctly without fixed offsets.
+  const spacerSize = Math.max(0, containerCenter - (item.clientHeight / 2));
+  container.querySelectorAll('.annot-spacer').forEach(spacer => {
+    spacer.style.height = `${spacerSize}px`;
+  });
+
+  const captionCenter = item.offsetTop + (item.clientHeight / 2);
+  let targetScrollTop = captionCenter - containerCenter;
+  const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
+  targetScrollTop = Math.max(0, Math.min(targetScrollTop, maxScroll));
+
+  container.scrollTo({
+    top: targetScrollTop,
+    behavior: 'smooth'
+  });
+}
+
+// ---- CSV parser (handles quoted fields) ----
+function parseCSV(text) {
+  const lines = text.split('\n');
+  const header = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,''));
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const fields = [];
+    let cur = '', inQ = false;
+    for (let c = 0; c < line.length; c++) {
+      if (line[c] === '"') { inQ = !inQ; }
+      else if (line[c] === ',' && !inQ) { fields.push(cur); cur = ''; }
+      else { cur += line[c]; }
+    }
+    fields.push(cur);
+    const row = {};
+    header.forEach((h, j) => row[h] = (fields[j] || '').trim());
+    rows.push(row);
+  }
+  return rows;
+}
+
+function detectColumns(rows) {
+  if (!rows.length) return {};
+  const keys = Object.keys(rows[0]);
+  const find = (...candidates) => candidates.find(c => keys.includes(c)) || null;
+  return {
+    video: find('video_id','videoid'),
+    start: find('start_timestamp','start_time','start','narration_timestamp'),
+    stop:  find('stop_timestamp','stop_time','end_timestamp','end','stop','end_time'),
+    text:  find('narration','description','text','caption'),
+    verb:  find('verb','verbs','verb_class'),
+    noun:  find('noun','nouns','noun_class'),
+    id:    find('narration_id','action_id','id'),
+  };
+}
+
+function normalizeTags(value) {
+  if (Array.isArray(value)) return value.map(v => String(v)).join(', ');
+  if (value == null) return '';
+  return String(value);
+}
+
+function normalizeKey(key) {
+  return String(key || '').trim().toLowerCase().replace(/\s+/g,'_').replace(/[^a-z0-9_]/g,'');
+}
+
+function normalizeRows(rows) {
+  return rows.map(row => {
+    const out = {};
+    Object.keys(row || {}).forEach(k => {
+      out[normalizeKey(k)] = row[k];
+    });
+    return out;
+  });
+}
+
+function extractVideoId(filename) {
+  return String(filename || '').replace(/\.[^.]+$/, '');
+}
+
+function refreshStatus() {
+  if (!allAnnotations.length) {
+    setStatus('load HD_EPIC_Narrations (.pkl/.csv)');
+    return;
+  }
+  if (!currentVideoId) {
+    setStatus(`${allAnnotations.length} total annotations loaded`);
+    return;
+  }
+  setStatus(`${filteredAnnotations.length} / ${annotations.length} annotations for ${currentVideoId}`);
+}
+
+function clearCurrentAnnotation() {
+  // Duplicate top-caption panel removed; keep no-op to preserve flow.
+}
+
+function applyVideoFilter() {
+  if (!currentVideoId || !allAnnotations.length) {
+    annotations = [];
+    filteredAnnotations = [];
+    activeIdx = -1;
+    renderList(filteredAnnotations);
+    buildTimeline();
+    clearCurrentAnnotation();
+    refreshStatus();
+    return;
+  }
+
+  const targetId = currentVideoId.toLowerCase();
+  annotations = allAnnotations
+    .filter(a => String(a.video_id || '').toLowerCase() === targetId)
+    .sort((a,b) => a.start - b.start);
+
+  filteredAnnotations = annotations;
+  activeIdx = -1;
+  renderList(filteredAnnotations);
+  buildTimeline();
+  clearCurrentAnnotation();
+  refreshStatus();
+}
+
+async function ensurePyodide() {
+  if (pyodide) return pyodide;
+  if (!pyodideInitPromise) {
+    pyodideInitPromise = (async () => {
+      setStatus('initializing Pyodide...');
+      if (!window.loadPyodide) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js';
+          script.onload = resolve;
+          script.onerror = () => reject(new Error('failed to load Pyodide from CDN'));
+          document.head.appendChild(script);
+        });
+      }
+      pyodide = await window.loadPyodide({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/' });
+      await pyodide.loadPackage('pandas');
+      return pyodide;
+    })();
+  }
+  return pyodideInitPromise;
+}
+
+async function parsePklRows(arrayBuffer) {
+  const runtime = await ensurePyodide();
+  runtime.globals.set('pkl_bytes', new Uint8Array(arrayBuffer));
+  const jsonText = await runtime.runPythonAsync(`
+import json
+import pickle
+
+try:
+    import pandas as pd
+except Exception:
+    pd = None
+
+def _norm(v):
+    if hasattr(v, 'item'):
+        try:
+            v = v.item()
+        except Exception:
+            pass
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            return v.decode('utf-8')
+        except Exception:
+            return str(v)
+    if isinstance(v, (list, tuple, set)):
+        return [_norm(x) for x in v]
+    if isinstance(v, dict):
+        return {str(k): _norm(val) for k, val in v.items()}
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    return str(v)
+
+obj = pickle.loads(bytes(pkl_bytes.to_py()))
+
+if hasattr(obj, 'to_dict'):
+    try:
+        records = obj.to_dict(orient='records')
+    except Exception:
+        records = obj.to_dict()
+        if isinstance(records, dict):
+            keys = list(records.keys())
+            length = len(records[keys[0]]) if keys else 0
+            records = [{k: records[k][i] for k in keys} for i in range(length)]
+elif isinstance(obj, list):
+    records = obj
+elif isinstance(obj, dict):
+    records = [obj]
+else:
+    records = []
+
+cleaned = []
+for row in records:
+    if isinstance(row, dict):
+        cleaned.append({str(k): _norm(v) for k, v in row.items()})
+
+json.dumps(cleaned, ensure_ascii=False)
+`);
+  return JSON.parse(jsonText);
+}
+
+async function parseCsvRows(arrayBuffer) {
+  const text = new TextDecoder('utf-8').decode(arrayBuffer).replace(/^\uFEFF/, '');
+  return parseCSV(text);
+}
+
+function resetAnnotationsOnError(message) {
+  allAnnotations = [];
+  annotations = [];
+  filteredAnnotations = [];
+  renderList(filteredAnnotations);
+  buildTimeline();
+  clearCurrentAnnotation();
+  setStatus(message);
+}
+
+async function loadAnnotationsFile(file) {
+  document.getElementById('csv-name').textContent = file.name;
+
+  const lowerName = file.name.toLowerCase();
+  const isCsv = lowerName.endsWith('.csv') || file.type === 'text/csv';
+
+  setStatus(isCsv ? 'reading CSV...' : 'reading PKL...');
+
+  const rows = isCsv
+    ? await parseCsvRows(await file.arrayBuffer())
+    : await parsePklRows(await file.arrayBuffer());
+
+  processRows(rows);
+  if (!currentVideoId) setStatus(`${allAnnotations.length} total annotations loaded`);
+}
+
+function processRows(rows) {
+  const normalizedRows = normalizeRows(rows || []);
+  const cols = detectColumns(normalizedRows);
+
+  if (!cols.video || !cols.start || !cols.text) {
+    throw new Error('missing required fields: expected video_id, narration, start_timestamp');
+  }
+
+  allAnnotations = normalizedRows.map(r => ({
+    video_id: String(r[cols.video] || '').trim(),
+    start: parseTime(r[cols.start] || 0),
+    stop: parseTime(r[cols.stop] || r[cols.start] || 0),
+    text: String(r[cols.text] || '(no text)'),
+    verb: cols.verb ? normalizeTags(r[cols.verb]) : '',
+    noun: cols.noun ? normalizeTags(r[cols.noun]) : '',
+    id: cols.id ? String(r[cols.id] || '') : '',
+  })).filter(a => a.video_id && (a.text !== '(no text)' || a.start > 0));
+
+  applyVideoFilter();
+}
+
+// ---- Load video ----
+document.getElementById('video-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  vid.src = URL.createObjectURL(file);
+  document.getElementById('video-name').textContent = file.name;
+  currentVideoId = extractVideoId(file.name);
+  dropHint.style.display = 'none';
+  vid.style.display = 'block';
+  applyVideoFilter();
+});
+
+// Drag & drop on video area
+const videoWrap = document.getElementById('video-wrap');
+videoWrap.addEventListener('dragover', e => { e.preventDefault(); });
+videoWrap.addEventListener('drop', e => {
+  e.preventDefault();
+  const file = [...e.dataTransfer.files].find(f => f.type.startsWith('video/'));
+  if (file) {
+    vid.src = URL.createObjectURL(file);
+    document.getElementById('video-name').textContent = file.name;
+    currentVideoId = extractVideoId(file.name);
+    dropHint.style.display = 'none';
+    vid.style.display = 'block';
+    applyVideoFilter();
+  }
+});
+
+// ---- Load global annotations (.pkl/.csv) ----
+document.getElementById('annotations-input').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    await loadAnnotationsFile(file);
+  } catch (err) {
+    resetAnnotationsOnError(`error: ${err.message || 'unable to parse annotations file'}`);
+  }
+});
+
+// ---- Timeline ----
+function buildTimeline() {
+  timelineSvg.innerHTML = '';
+  if (!annotations.length) {
+    cursor.style.left = '0%';
+    progress.style.width = '0%';
+    return;
+  }
+  if (!annotations.length) return;
+  const dur = vid.duration || annotations[annotations.length-1].stop || 1;
+  timelineSvg.setAttribute('viewBox', `0 0 1000 20`);
+  annotations.forEach(a => {
+    const x = (a.start / dur) * 1000;
+    const w = Math.max(2, ((a.stop - a.start) / dur) * 1000);
+    const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('x', x);
+    rect.setAttribute('y', 0);
+    rect.setAttribute('width', w);
+    rect.setAttribute('height', 20);
+    rect.setAttribute('fill', '#2a5');
+    rect.setAttribute('opacity', '0.55');
+    rect.setAttribute('rx', '1');
+    timelineSvg.appendChild(rect);
+  });
+}
+
+vid.addEventListener('loadedmetadata', () => {
+  tEnd.textContent = fmtTime(vid.duration);
+  buildTimeline();
+});
+
+vid.addEventListener('timeupdate', () => {
+  const t = vid.currentTime, dur = vid.duration || 1;
+  const pct = (t / dur) * 100;
+  cursor.style.left = pct + '%';
+  progress.style.width = pct + '%';
+  tCur.textContent = fmtTime(t);
+  highlightActive(t);
+});
+
+// Seek on timeline click
+timelineTrack.addEventListener('click', e => {
+  const rect = timelineTrack.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width;
+  if (vid.duration) vid.currentTime = pct * vid.duration;
+});
+
+// ---- Active annotation ----
+function highlightActive(t) {
+  let idx = -1;
+  for (let i = 0; i < annotations.length; i++) {
+    if (annotations[i].start <= t && annotations[i].stop >= t) { idx = i; break; }
+  }
+  // fallback: nearest past
+  if (idx === -1) {
+    for (let i = annotations.length - 1; i >= 0; i--) {
+      if (annotations[i].start <= t) { idx = i; break; }
+    }
+  }
+  if (idx === activeIdx) return;
+  activeIdx = idx;
+
+  const prev = annotList.querySelector('.active');
+  if (prev) prev.classList.remove('active');
+
+  if (idx === -1) {
+    clearCurrentAnnotation();
+    return;
+  }
+
+  const a = annotations[idx];
+
+  // scroll sidebar to matching item
+  const filtIdx = filteredAnnotations.indexOf(a);
+  if (filtIdx !== -1) {
+    const item = annotList.querySelector(`.annot-item[data-annot-index="${filtIdx}"]`);
+    if (item) {
+      item.classList.add('active');
+      scrollActiveItemToCenter(item);
+    }
+  }
+}
+
+// ---- Annotation list ----
+function renderList(annots) {
+  annotList.innerHTML = '';
+
+  const topSpacer = document.createElement('div');
+  topSpacer.className = 'annot-spacer';
+  annotList.appendChild(topSpacer);
+
+  annots.forEach((a, i) => {
+    const el = document.createElement('div');
+    el.className = 'annot-item';
+    el.dataset.annotIndex = String(i);
+    el.innerHTML = `
+      <div class="annot-time">${fmtCaptionMeta(a.start, a.stop)}</div>
+      <div class="annot-text">${a.text}</div>
+      ${(a.verb || a.noun) ? `<div class="annot-tags">${a.verb ? `<span class="tag-v">${a.verb}</span>` : ''}${a.noun ? `<span class="tag-n">${a.noun}</span>` : ''}</div>` : ''}
+    `;
+    el.addEventListener('click', () => {
+      if (vid.duration) vid.currentTime = a.start;
+    });
+    annotList.appendChild(el);
+  });
+
+  const bottomSpacer = document.createElement('div');
+  bottomSpacer.className = 'annot-spacer';
+  annotList.appendChild(bottomSpacer);
+
+  updateCaptionSpacers();
+
+  if (activeIdx !== -1) {
+    const activeAnnot = annotations[activeIdx];
+    const filtIdx = annots.indexOf(activeAnnot);
+    if (filtIdx !== -1) {
+      const item = annotList.querySelector(`.annot-item[data-annot-index="${filtIdx}"]`);
+      if (item) {
+        item.classList.add('active');
+        scrollActiveItemToCenter(item);
+      }
+    }
+  }
+}
+
+// ---- Search ----
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  if (!q) { filteredAnnotations = annotations; }
+  else { filteredAnnotations = annotations.filter(a => a.text.toLowerCase().includes(q) || a.verb.toLowerCase().includes(q) || a.noun.toLowerCase().includes(q)); }
+  renderList(filteredAnnotations);
+  refreshStatus();
+});
+
+window.addEventListener('resize', updateCaptionSpacers);
+
+// hide video initially
+vid.style.display = 'none';
+setStatus('load a video and HD_EPIC_Narrations (.pkl/.csv)');
+</script>
+</body>
+</html>
