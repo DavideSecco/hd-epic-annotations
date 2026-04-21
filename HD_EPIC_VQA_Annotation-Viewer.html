@@ -14,7 +14,7 @@
   .file-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; white-space: nowrap; }
   .file-btn:hover { background: #2a2a2a; border-color: #666; }
   #video-name { font-size: 12px; color: #666; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #csv-name { font-size: 12px; color: #666; }
+  #csv-name, #audio-name { font-size: 12px; color: #666; }
   #stats { font-size: 11px; color: #555; white-space: nowrap; }
 
   /* --- Main layout --- */
@@ -24,14 +24,58 @@
   #video-panel { flex: 0 0 50%; display: flex; flex-direction: column; background: #090909; min-width: 0; min-height: 0; }
   #video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #090909; position: relative; padding: 0; overflow: hidden; min-height: 0; }
   video { width: 100%; height: auto; max-width: 100%; max-height: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; }
+  #audio-hud {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 58px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    pointer-events: none;
+    z-index: 3;
+  }
+  #audio-hud:empty { display: none; }
+  .audio-box {
+    position: relative;
+    overflow: hidden;
+    background: rgba(16, 12, 22, 0.7);
+    border: 1px solid rgba(168, 85, 247, 0.75);
+    border-radius: 10px;
+    padding: 6px 10px;
+    min-width: 160px;
+    max-width: 340px;
+    color: #efe6ff;
+    font-size: 12px;
+    line-height: 1.25;
+    font-variant-numeric: tabular-nums;
+    pointer-events: auto;
+  }
+  .audio-progress-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0;
+    background: linear-gradient(90deg, rgba(168, 85, 247, 0.5) 0%, rgba(196, 126, 255, 0.65) 100%);
+    z-index: 0;
+  }
+  .audio-box-text {
+    position: relative;
+    z-index: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   #drop-hint { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 8px; color: #444; font-size: 14px; pointer-events: none; }
   #drop-hint .big { font-size: 36px; }
 
   /* --- Timeline --- */
   #timeline-wrap { flex-shrink: 0; background: #151515; border-top: 1px solid #2a2a2a; padding: 6px 12px 8px; }
-  #timeline-track { position: relative; height: 28px; background: #1e1e1e; border-radius: 4px; cursor: pointer; overflow: hidden; }
+  #timeline-track { position: relative; height: 40px; background: #1e1e1e; border-radius: 4px; cursor: pointer; overflow: hidden; }
   #timeline-progress { position: absolute; top: 0; left: 0; height: 100%; background: rgba(255,255,255,0.05); pointer-events: none; }
-  #timeline-segments { position: absolute; top: 4px; left: 0; height: 20px; width: 100%; pointer-events: none; }
+  #timeline-segments { position: absolute; top: 4px; left: 0; height: 32px; width: 100%; pointer-events: none; }
   #timeline-cursor { position: absolute; top: 0; width: 2px; background: #fff; height: 100%; pointer-events: none; }
   #time-labels { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 4px; }
 
@@ -113,6 +157,9 @@
   <button class="file-btn" onclick="document.getElementById('annotations-input').click()">Load annotations (.pkl/.csv)</button>
   <input type="file" id="annotations-input" accept=".pkl,.pickle,.csv,application/octet-stream,text/csv" style="display:none">
   <span id="csv-name">no annotations loaded</span>
+  <button class="file-btn" onclick="document.getElementById('audio-input').click()">Load audio (.csv)</button>
+  <input type="file" id="audio-input" accept=".csv,text/csv" style="display:none">
+  <span id="audio-name">no audio loaded</span>
   <span id="stats"></span>
 </div>
 
@@ -125,6 +172,7 @@
         <span style="font-size:12px;color:#333">Then load global narrations (.pkl/.csv)</span>
       </div>
       <video id="vid" controls></video>
+      <div id="audio-hud"></div>
     </div>
     <div id="timeline-wrap">
       <div id="timeline-track">
@@ -141,9 +189,9 @@
   </div>
 
   <div id="annot-panel">
-    <div id="annot-header">Annotations</div>
+    <div id="annot-header">Narrations</div>
     <div id="search-wrap">
-      <input type="text" id="search" placeholder="Search narrations…">
+      <input type="text" id="search" placeholder="Search narrations and audio…">
     </div>
     <div id="annot-list"></div>
   </div>
@@ -157,6 +205,7 @@ const timelineSvg = document.getElementById('timeline-segments');
 const cursor = document.getElementById('timeline-cursor');
 const progress = document.getElementById('timeline-progress');
 const annotList = document.getElementById('annot-list');
+const audioHud = document.getElementById('audio-hud');
 const searchInput = document.getElementById('search');
 const tStart = document.getElementById('t-start');
 const tCur = document.getElementById('t-cur');
@@ -164,6 +213,9 @@ const tEnd = document.getElementById('t-end');
 
 let allAnnotations = [];
 let annotations = [];
+let allAudioAnnotations = [];
+let audioAnnotations = [];
+let mergedAnnotations = [];
 let filteredAnnotations = [];
 let activeIdx = -1;
 let currentVideoId = '';
@@ -305,15 +357,15 @@ function extractVideoId(filename) {
 }
 
 function refreshStatus() {
-  if (!allAnnotations.length) {
-    setStatus('load HD_EPIC_Narrations (.pkl/.csv)');
+  if (!allAnnotations.length && !allAudioAnnotations.length) {
+    setStatus('load HD_EPIC_Narrations (.pkl/.csv) and Audio annotations (.csv)');
     return;
   }
   if (!currentVideoId) {
-    setStatus(`${allAnnotations.length} total annotations loaded`);
+    setStatus(`${allAnnotations.length} narrations, ${allAudioAnnotations.length} audio loaded`);
     return;
   }
-  setStatus(`${filteredAnnotations.length} / ${annotations.length} annotations for ${currentVideoId}`);
+  setStatus(`${filteredAnnotations.length} / ${mergedAnnotations.length} items for ${currentVideoId} (${annotations.length} narr, ${audioAnnotations.length} audio)`);
 }
 
 function clearCurrentAnnotation() {
@@ -321,11 +373,14 @@ function clearCurrentAnnotation() {
 }
 
 function applyVideoFilter() {
-  if (!currentVideoId || !allAnnotations.length) {
+  if (!currentVideoId) {
     annotations = [];
+    audioAnnotations = [];
+    mergedAnnotations = [];
     filteredAnnotations = [];
     activeIdx = -1;
     renderList(filteredAnnotations);
+    renderAudioHud(0);
     buildTimeline();
     clearCurrentAnnotation();
     refreshStatus();
@@ -337,9 +392,23 @@ function applyVideoFilter() {
     .filter(a => String(a.video_id || '').toLowerCase() === targetId)
     .sort((a,b) => a.start - b.start);
 
+  audioAnnotations = allAudioAnnotations
+    .filter(a => String(a.video_id || '').toLowerCase() === targetId)
+    .sort((a,b) => a.start - b.start);
+
+  mergedAnnotations = [
+    ...annotations.map((a, idx) => ({ ...a, type: 'narration', mergedId: `n-${idx}` })),
+    ...audioAnnotations.map((a, idx) => ({ ...a, type: 'audio', mergedId: `a-${idx}` })),
+  ].sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    if (a.type !== b.type) return a.type === 'narration' ? -1 : 1;
+    return 0;
+  });
+
   filteredAnnotations = annotations;
   activeIdx = -1;
   renderList(filteredAnnotations);
+  renderAudioHud(vid.currentTime || 0);
   buildTimeline();
   clearCurrentAnnotation();
   refreshStatus();
@@ -433,12 +502,14 @@ async function parseCsvRows(arrayBuffer) {
 
 function resetAnnotationsOnError(message) {
   allAnnotations = [];
-  annotations = [];
-  filteredAnnotations = [];
-  renderList(filteredAnnotations);
-  buildTimeline();
-  clearCurrentAnnotation();
-  setStatus(message);
+  applyVideoFilter();
+  setStatus(`narrations error: ${message}`);
+}
+
+function resetAudioOnError(message) {
+  allAudioAnnotations = [];
+  applyVideoFilter();
+  setStatus(`audio error: ${message}`);
 }
 
 async function loadAnnotationsFile(file) {
@@ -454,7 +525,26 @@ async function loadAnnotationsFile(file) {
     : await parsePklRows(await file.arrayBuffer());
 
   processRows(rows);
-  if (!currentVideoId) setStatus(`${allAnnotations.length} total annotations loaded`);
+  if (!currentVideoId) setStatus(`${allAnnotations.length} narrations loaded`);
+}
+
+function detectAudioColumns(rows) {
+  if (!rows.length) return {};
+  const keys = Object.keys(rows[0]);
+  const find = (...candidates) => candidates.find(c => keys.includes(c)) || null;
+  return {
+    video: find('video_id','videoid'),
+    start: find('start_timestamp','start_time','start'),
+    stop: find('stop_timestamp','stop_time','end_timestamp','end','stop','end_time'),
+    audioClass: find('audio_class','audio','sound_class','sound','class'),
+  };
+}
+
+async function loadAudioFile(file) {
+  document.getElementById('audio-name').textContent = file.name;
+  setStatus('reading audio CSV...');
+  const rows = await parseCsvRows(await file.arrayBuffer());
+  processAudioRows(rows);
 }
 
 function processRows(rows) {
@@ -476,6 +566,53 @@ function processRows(rows) {
   })).filter(a => a.video_id && (a.text !== '(no text)' || a.start > 0));
 
   applyVideoFilter();
+}
+
+function processAudioRows(rows) {
+  const normalizedRows = normalizeRows(rows || []);
+  const cols = detectAudioColumns(normalizedRows);
+
+  if (!cols.video || !cols.start || !cols.audioClass) {
+    throw new Error('missing required audio fields: expected video_id, audio_class, start_timestamp');
+  }
+
+  allAudioAnnotations = normalizedRows.map(r => ({
+    video_id: String(r[cols.video] || '').trim(),
+    start: parseTime(r[cols.start] || 0),
+    stop: parseTime(r[cols.stop] || r[cols.start] || 0),
+    audio_class: String(r[cols.audioClass] || '(unknown audio)'),
+  })).filter(a => a.video_id && (a.audio_class !== '(unknown audio)' || a.start > 0));
+
+  applyVideoFilter();
+}
+
+function renderAudioHud(currentTime) {
+  audioHud.innerHTML = '';
+  if (!audioAnnotations.length) return;
+
+  const activeAudio = audioAnnotations.filter(a => a.start <= currentTime && a.stop >= currentTime);
+  if (!activeAudio.length) return;
+
+  activeAudio.forEach(a => {
+    const total = Math.max(0.001, Number(a.stop || 0) - Number(a.start || 0));
+    const elapsed = Math.max(0, Math.min(total, currentTime - a.start));
+    const progressPct = Math.max(0, Math.min(100, (elapsed / total) * 100));
+
+    const box = document.createElement('div');
+    box.className = 'audio-box';
+
+    const progressBar = document.createElement('div');
+    progressBar.className = 'audio-progress-bar';
+    progressBar.style.width = `${progressPct}%`;
+
+    const text = document.createElement('div');
+    text.className = 'audio-box-text';
+    text.textContent = `${a.audio_class} (${elapsed.toFixed(1)}s / ${total.toFixed(1)}s)`;
+
+    box.appendChild(progressBar);
+    box.appendChild(text);
+    audioHud.appendChild(box);
+  });
 }
 
 // ---- Load video ----
@@ -513,30 +650,43 @@ document.getElementById('annotations-input').addEventListener('change', async e 
   try {
     await loadAnnotationsFile(file);
   } catch (err) {
-    resetAnnotationsOnError(`error: ${err.message || 'unable to parse annotations file'}`);
+    resetAnnotationsOnError(err.message || 'unable to parse annotations file');
+  }
+});
+
+document.getElementById('audio-input').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    await loadAudioFile(file);
+  } catch (err) {
+    resetAudioOnError(err.message || 'unable to parse audio annotations file');
   }
 });
 
 // ---- Timeline ----
 function buildTimeline() {
   timelineSvg.innerHTML = '';
-  if (!annotations.length) {
+  if (!mergedAnnotations.length) {
     cursor.style.left = '0%';
     progress.style.width = '0%';
     return;
   }
-  if (!annotations.length) return;
-  const dur = vid.duration || annotations[annotations.length-1].stop || 1;
+
+  const maxStop = mergedAnnotations.reduce((maxVal, a) => Math.max(maxVal, a.stop || 0), 0);
+  const dur = vid.duration || maxStop || 1;
   timelineSvg.setAttribute('viewBox', `0 0 1000 20`);
-  annotations.forEach(a => {
+
+  // Dual-lane timeline: narrations on top, audio on bottom.
+  mergedAnnotations.forEach(a => {
     const x = (a.start / dur) * 1000;
     const w = Math.max(2, ((a.stop - a.start) / dur) * 1000);
     const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
     rect.setAttribute('x', x);
-    rect.setAttribute('y', 0);
+    rect.setAttribute('y', a.type === 'audio' ? 11 : 0);
     rect.setAttribute('width', w);
-    rect.setAttribute('height', 20);
-    rect.setAttribute('fill', '#2a5');
+    rect.setAttribute('height', a.type === 'audio' ? 9 : 10);
+    rect.setAttribute('fill', a.type === 'audio' ? '#f5a623' : '#2a5');
     rect.setAttribute('opacity', '0.55');
     rect.setAttribute('rx', '1');
     timelineSvg.appendChild(rect);
@@ -554,6 +704,7 @@ vid.addEventListener('timeupdate', () => {
   cursor.style.left = pct + '%';
   progress.style.width = pct + '%';
   tCur.textContent = fmtTime(t);
+  renderAudioHud(t);
   highlightActive(t);
 });
 
@@ -570,12 +721,13 @@ function highlightActive(t) {
   for (let i = 0; i < annotations.length; i++) {
     if (annotations[i].start <= t && annotations[i].stop >= t) { idx = i; break; }
   }
-  // fallback: nearest past
+
   if (idx === -1) {
     for (let i = annotations.length - 1; i >= 0; i--) {
       if (annotations[i].start <= t) { idx = i; break; }
     }
   }
+
   if (idx === activeIdx) return;
   activeIdx = idx;
 
@@ -589,7 +741,6 @@ function highlightActive(t) {
 
   const a = annotations[idx];
 
-  // scroll sidebar to matching item
   const filtIdx = filteredAnnotations.indexOf(a);
   if (filtIdx !== -1) {
     const item = annotList.querySelector(`.annot-item[data-annot-index="${filtIdx}"]`);
@@ -612,6 +763,7 @@ function renderList(annots) {
     const el = document.createElement('div');
     el.className = 'annot-item';
     el.dataset.annotIndex = String(i);
+
     el.innerHTML = `
       <div class="annot-time">${fmtCaptionMeta(a.start, a.stop)}</div>
       <div class="annot-text">${a.text}</div>
@@ -629,24 +781,19 @@ function renderList(annots) {
 
   updateCaptionSpacers();
 
-  if (activeIdx !== -1) {
-    const activeAnnot = annotations[activeIdx];
-    const filtIdx = annots.indexOf(activeAnnot);
-    if (filtIdx !== -1) {
-      const item = annotList.querySelector(`.annot-item[data-annot-index="${filtIdx}"]`);
-      if (item) {
-        item.classList.add('active');
-        scrollActiveItemToCenter(item);
-      }
-    }
-  }
+  if (annotations.length && vid.currentTime >= 0) highlightActive(vid.currentTime);
 }
 
 // ---- Search ----
 searchInput.addEventListener('input', () => {
   const q = searchInput.value.trim().toLowerCase();
-  if (!q) { filteredAnnotations = annotations; }
-  else { filteredAnnotations = annotations.filter(a => a.text.toLowerCase().includes(q) || a.verb.toLowerCase().includes(q) || a.noun.toLowerCase().includes(q)); }
+  if (!q) {
+    filteredAnnotations = annotations;
+  } else {
+    filteredAnnotations = annotations.filter(a => String(a.text || '').toLowerCase().includes(q)
+      || String(a.verb || '').toLowerCase().includes(q)
+      || String(a.noun || '').toLowerCase().includes(q));
+  }
   renderList(filteredAnnotations);
   refreshStatus();
 });
@@ -655,7 +802,7 @@ window.addEventListener('resize', updateCaptionSpacers);
 
 // hide video initially
 vid.style.display = 'none';
-setStatus('load a video and HD_EPIC_Narrations (.pkl/.csv)');
+setStatus('load a video, HD_EPIC_Narrations (.pkl/.csv), and optional Audio annotations (.csv)');
 </script>
 </body>
 </html>
