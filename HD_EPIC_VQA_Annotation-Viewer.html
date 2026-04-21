@@ -14,7 +14,7 @@
   .file-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; white-space: nowrap; }
   .file-btn:hover { background: #2a2a2a; border-color: #666; }
   #video-name { font-size: 12px; color: #666; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #csv-name, #audio-name { font-size: 12px; color: #666; }
+  #csv-name, #audio-name, #step-name { font-size: 12px; color: #666; }
   #stats { font-size: 11px; color: #555; white-space: nowrap; }
 
   /* --- Main layout --- */
@@ -92,6 +92,47 @@
     overflow-y: auto;
     scroll-behavior: smooth;
   }
+  #recipe-overview {
+    flex: 0 0 30%;
+    max-height: 35%;
+    min-height: 0;
+    overflow-y: auto;
+    border-top: 1px solid #2a2a2a;
+    padding: 12px 14px;
+    background: #0f0f0f;
+    font-size: 12px;
+    color: #aaa;
+  }
+  #recipe-overview h2 {
+    margin: 0 0 8px;
+    color: #f5f5f5;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+  #recipe-overview .recipe-source {
+    margin-bottom: 8px;
+    color: #8fb3ff;
+    word-break: break-word;
+  }
+  #recipe-overview .recipe-source a {
+    color: #6f95e6;
+    text-decoration: none;
+  }
+  #recipe-overview .recipe-source a:hover {
+    text-decoration: underline;
+  }
+  #recipe-overview ol {
+    margin-left: 18px;
+    padding-top: 4px;
+  }
+  #recipe-overview li {
+    margin-bottom: 4px;
+    line-height: 1.35;
+  }
+  #recipe-overview .recipe-empty {
+    color: #666;
+  }
   .annot-item {
     font-size: var(--caption-size-base);
     padding: 8px 14px;
@@ -131,6 +172,18 @@
   .annot-item.active .tag-n { font-size: var(--tag-size-active); }
 
   /* --- Search --- */
+  #step-context {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    padding: 10px 14px;
+    border-bottom: 2px solid #3b82f6;
+    background: #141414;
+    color: #dbeafe;
+    font-size: 13px;
+    font-weight: 500;
+    line-height: 1.3;
+  }
   #search-wrap { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; }
   #search { width: 100%; padding: 5px 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; color: #eee; font-size: 12px; }
   #search::placeholder { color: #555; }
@@ -160,6 +213,9 @@
   <button class="file-btn" onclick="document.getElementById('audio-input').click()">Load audio (.csv)</button>
   <input type="file" id="audio-input" accept=".csv,text/csv" style="display:none">
   <span id="audio-name">no audio loaded</span>
+  <button class="file-btn" onclick="document.getElementById('recipes-input').click()">Load Recipes (.json)</button>
+  <input type="file" id="recipes-input" accept=".json,application/json" style="display:none">
+  <span id="step-name">no recipes loaded</span>
   <span id="stats"></span>
 </div>
 
@@ -190,10 +246,12 @@
 
   <div id="annot-panel">
     <div id="annot-header">Narrations</div>
+    <div id="step-context">Nessuna macro-fase attiva</div>
     <div id="search-wrap">
-      <input type="text" id="search" placeholder="Search narrations and audio…">
+      <input type="text" id="search" placeholder="Search narrations, audio and recipes steps…">
     </div>
     <div id="annot-list"></div>
+    <div id="recipe-overview"></div>
   </div>
 </div>
 
@@ -205,7 +263,9 @@ const timelineSvg = document.getElementById('timeline-segments');
 const cursor = document.getElementById('timeline-cursor');
 const progress = document.getElementById('timeline-progress');
 const annotList = document.getElementById('annot-list');
+const recipeOverview = document.getElementById('recipe-overview');
 const audioHud = document.getElementById('audio-hud');
+const stepContext = document.getElementById('step-context');
 const searchInput = document.getElementById('search');
 const tStart = document.getElementById('t-start');
 const tCur = document.getElementById('t-cur');
@@ -215,10 +275,13 @@ let allAnnotations = [];
 let annotations = [];
 let allAudioAnnotations = [];
 let audioAnnotations = [];
+let stepAnnotations = [];
 let mergedAnnotations = [];
 let filteredAnnotations = [];
 let activeIdx = -1;
 let currentVideoId = '';
+let rawRecipesJson = null;
+let currentRecipeMeta = null;
 
 let pyodide = null;
 let pyodideInitPromise = null;
@@ -357,15 +420,15 @@ function extractVideoId(filename) {
 }
 
 function refreshStatus() {
-  if (!allAnnotations.length && !allAudioAnnotations.length) {
-    setStatus('load HD_EPIC_Narrations (.pkl/.csv) and Audio annotations (.csv)');
+  if (!allAnnotations.length && !allAudioAnnotations.length && !rawRecipesJson) {
+    setStatus('load HD_EPIC_Narrations (.pkl/.csv), Audio annotations (.csv), and Recipes (.json)');
     return;
   }
   if (!currentVideoId) {
-    setStatus(`${allAnnotations.length} narrations, ${allAudioAnnotations.length} audio loaded`);
+    setStatus(`${allAnnotations.length} narrations, ${allAudioAnnotations.length} audio, ${rawRecipesJson ? 'recipes loaded' : 'no recipes loaded'}`);
     return;
   }
-  setStatus(`${filteredAnnotations.length} / ${mergedAnnotations.length} items for ${currentVideoId} (${annotations.length} narr, ${audioAnnotations.length} audio)`);
+  setStatus(`${filteredAnnotations.length} / ${annotations.length} narrations for ${currentVideoId} (${stepAnnotations.length} macro-phases, ${audioAnnotations.length} audio)`);
 }
 
 function clearCurrentAnnotation() {
@@ -376,11 +439,15 @@ function applyVideoFilter() {
   if (!currentVideoId) {
     annotations = [];
     audioAnnotations = [];
+    stepAnnotations = [];
+    currentRecipeMeta = null;
     mergedAnnotations = [];
     filteredAnnotations = [];
     activeIdx = -1;
     renderList(filteredAnnotations);
+    renderRecipeOverview(null);
     renderAudioHud(0);
+    updateStepContext(0);
     buildTimeline();
     clearCurrentAnnotation();
     refreshStatus();
@@ -396,19 +463,30 @@ function applyVideoFilter() {
     .filter(a => String(a.video_id || '').toLowerCase() === targetId)
     .sort((a,b) => a.start - b.start);
 
+  if (rawRecipesJson) {
+    extractStepsForVideo(currentVideoId);
+  } else {
+    stepAnnotations = [];
+    currentRecipeMeta = null;
+  }
+
   mergedAnnotations = [
+    ...stepAnnotations.map((a, idx) => ({ ...a, mergedId: `s-${idx}` })),
     ...annotations.map((a, idx) => ({ ...a, type: 'narration', mergedId: `n-${idx}` })),
     ...audioAnnotations.map((a, idx) => ({ ...a, type: 'audio', mergedId: `a-${idx}` })),
   ].sort((a, b) => {
     if (a.start !== b.start) return a.start - b.start;
-    if (a.type !== b.type) return a.type === 'narration' ? -1 : 1;
+    const typeOrder = { step: 0, narration: 1, audio: 2 };
+    if (a.type !== b.type) return typeOrder[a.type] - typeOrder[b.type];
     return 0;
   });
 
   filteredAnnotations = annotations;
   activeIdx = -1;
   renderList(filteredAnnotations);
+  renderRecipeOverview(currentRecipeMeta);
   renderAudioHud(vid.currentTime || 0);
+  updateStepContext(vid.currentTime || 0);
   buildTimeline();
   clearCurrentAnnotation();
   refreshStatus();
@@ -512,6 +590,15 @@ function resetAudioOnError(message) {
   setStatus(`audio error: ${message}`);
 }
 
+function resetStepsOnError(message) {
+  rawRecipesJson = null;
+  stepAnnotations = [];
+  currentRecipeMeta = null;
+  document.getElementById('step-name').textContent = 'no recipes loaded';
+  applyVideoFilter();
+  setStatus(`recipes error: ${message}`);
+}
+
 async function loadAnnotationsFile(file) {
   document.getElementById('csv-name').textContent = file.name;
 
@@ -545,6 +632,22 @@ async function loadAudioFile(file) {
   setStatus('reading audio CSV...');
   const rows = await parseCsvRows(await file.arrayBuffer());
   processAudioRows(rows);
+}
+
+async function loadRecipesFile(file) {
+  document.getElementById('step-name').textContent = file.name;
+  setStatus('reading recipes JSON...');
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (_err) {
+    throw new Error('invalid JSON format');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('invalid recipes payload: expected root object');
+  }
+  rawRecipesJson = parsed;
+  applyVideoFilter();
 }
 
 function processRows(rows) {
@@ -584,6 +687,122 @@ function processAudioRows(rows) {
   })).filter(a => a.video_id && (a.audio_class !== '(unknown audio)' || a.start > 0));
 
   applyVideoFilter();
+}
+
+function extractStepsForVideo(videoId) {
+  const targetVideoId = String(videoId || '').trim();
+  const tempSteps = [];
+  let matchedRecipeMeta = null;
+
+  Object.keys(rawRecipesJson || {}).forEach(recipeId => {
+    const recipe = rawRecipesJson[recipeId];
+    if (!recipe || typeof recipe !== 'object') return;
+
+    const captures = Array.isArray(recipe.captures) ? recipe.captures : [];
+    captures.forEach(capture => {
+      if (!capture || typeof capture !== 'object') return;
+      const videos = Array.isArray(capture.videos) ? capture.videos : [];
+      if (!videos.includes(targetVideoId)) return;
+      if (!matchedRecipeMeta) {
+        const name = String(recipe.name || recipe.title || recipeId).trim() || recipeId;
+        const source = String(recipe.source || recipe.url || '').trim();
+        const steps = (recipe.steps && typeof recipe.steps === 'object' && !Array.isArray(recipe.steps)) ? recipe.steps : {};
+        matchedRecipeMeta = { name, source, steps };
+      }
+
+      const stepsMap = (recipe.steps && typeof recipe.steps === 'object') ? recipe.steps : {};
+      const stepTimes = (capture.step_times && typeof capture.step_times === 'object') ? capture.step_times : {};
+      const prepTimes = (capture.prep_times && typeof capture.prep_times === 'object') ? capture.prep_times : {};
+
+      Object.keys(stepTimes).forEach(stepId => {
+        const events = Array.isArray(stepTimes[stepId]) ? stepTimes[stepId] : [];
+        events.forEach(item => {
+          if (!item || item.video !== targetVideoId) return;
+          const description = String(stepsMap[stepId] || stepId || '(step)').trim();
+          tempSteps.push({
+            start: parseTime(item.start || 0),
+            stop: parseTime(item.end || item.start || 0),
+            text: description,
+            type: 'step',
+          });
+        });
+      });
+
+      Object.keys(prepTimes).forEach(stepId => {
+        const events = Array.isArray(prepTimes[stepId]) ? prepTimes[stepId] : [];
+        events.forEach(item => {
+          if (!item || item.video !== targetVideoId) return;
+          const description = String(stepsMap[stepId] || stepId || '(prep)').trim();
+          tempSteps.push({
+            start: parseTime(item.start || 0),
+            stop: parseTime(item.end || item.start || 0),
+            text: description,
+            type: 'prep',
+          });
+        });
+      });
+    });
+  });
+
+  tempSteps.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    if (a.type !== b.type) return a.type === 'step' ? -1 : 1;
+    return 0;
+  });
+  stepAnnotations = tempSteps;
+  currentRecipeMeta = matchedRecipeMeta;
+}
+
+function renderRecipeOverview(meta) {
+  if (!meta) {
+    recipeOverview.innerHTML = '<div class="recipe-empty">Nessuna ricetta associata</div>';
+    return;
+  }
+
+  const safeName = String(meta.name || 'Ricetta').trim();
+  const safeSource = String(meta.source || '').trim();
+  const stepValues = Object.values(meta.steps || {}).map(v => String(v || '').trim()).filter(Boolean);
+  const listHtml = stepValues.length
+    ? `<ol>${stepValues.map(step => `<li>${step}</li>`).join('')}</ol>`
+    : '<div class="recipe-empty">Nessuno step disponibile</div>';
+  const sourceHtml = safeSource
+    ? `<div class="recipe-source">Sorgente: <a href="${safeSource}" target="_blank" rel="noopener noreferrer">Link Ricetta originale</a></div>`
+    : '<div class="recipe-source">Sorgente non disponibile</div>';
+
+  recipeOverview.innerHTML = `
+    <h2>${safeName}</h2>
+    ${sourceHtml}
+    ${listHtml}
+  `;
+}
+
+function getActiveStepAt(currentTime) {
+  if (!stepAnnotations.length) return null;
+  let activeStep = null;
+  for (let i = 0; i < stepAnnotations.length; i++) {
+    const step = stepAnnotations[i];
+    if (step.start <= currentTime && step.stop >= currentTime) {
+      if (step.type === 'prep') return step;
+      if (!activeStep) activeStep = step;
+    }
+  }
+  return activeStep;
+}
+
+function updateStepContext(currentTime) {
+  const activeStep = getActiveStepAt(currentTime);
+  if (!activeStep) {
+    stepContext.textContent = 'Nessuna macro-fase attiva';
+    stepContext.style.borderBottomColor = '#3b82f6';
+    return;
+  }
+  if (activeStep.type === 'prep') {
+    stepContext.textContent = `Prep: ${activeStep.text}`;
+    stepContext.style.borderBottomColor = '#0ea5e9';
+    return;
+  }
+  stepContext.textContent = `Fase: ${activeStep.text}`;
+  stepContext.style.borderBottomColor = '#3b82f6';
 }
 
 function renderAudioHud(currentTime) {
@@ -664,6 +883,16 @@ document.getElementById('audio-input').addEventListener('change', async e => {
   }
 });
 
+document.getElementById('recipes-input').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    await loadRecipesFile(file);
+  } catch (err) {
+    resetStepsOnError(err.message || 'unable to parse recipes JSON file');
+  }
+});
+
 // ---- Timeline ----
 function buildTimeline() {
   timelineSvg.innerHTML = '';
@@ -675,19 +904,30 @@ function buildTimeline() {
 
   const maxStop = mergedAnnotations.reduce((maxVal, a) => Math.max(maxVal, a.stop || 0), 0);
   const dur = vid.duration || maxStop || 1;
-  timelineSvg.setAttribute('viewBox', `0 0 1000 20`);
+  timelineSvg.setAttribute('viewBox', `0 0 1000 30`);
 
-  // Dual-lane timeline: narrations on top, audio on bottom.
-  mergedAnnotations.forEach(a => {
+  const sortedForTopLane = [
+    ...mergedAnnotations.filter(a => a.type === 'step'),
+    ...mergedAnnotations.filter(a => a.type === 'prep'),
+    ...mergedAnnotations.filter(a => a.type === 'narration'),
+    ...mergedAnnotations.filter(a => a.type === 'audio'),
+  ];
+
+  sortedForTopLane.forEach(a => {
     const x = (a.start / dur) * 1000;
     const w = Math.max(2, ((a.stop - a.start) / dur) * 1000);
     const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    const y = (a.type === 'step' || a.type === 'prep') ? 0 : (a.type === 'narration' ? 11 : 22);
+    const h = (a.type === 'step' || a.type === 'prep') ? 8 : 8;
+    const fill = a.type === 'step' ? '#3b82f6'
+      : (a.type === 'prep' ? '#0ea5e9' : (a.type === 'narration' ? '#2a5' : '#f5a623'));
+    const opacity = (a.type === 'step' || a.type === 'prep') ? '0.75' : '0.58';
     rect.setAttribute('x', x);
-    rect.setAttribute('y', a.type === 'audio' ? 11 : 0);
+    rect.setAttribute('y', y);
     rect.setAttribute('width', w);
-    rect.setAttribute('height', a.type === 'audio' ? 9 : 10);
-    rect.setAttribute('fill', a.type === 'audio' ? '#f5a623' : '#2a5');
-    rect.setAttribute('opacity', '0.55');
+    rect.setAttribute('height', h);
+    rect.setAttribute('fill', fill);
+    rect.setAttribute('opacity', opacity);
     rect.setAttribute('rx', '1');
     timelineSvg.appendChild(rect);
   });
@@ -705,6 +945,7 @@ vid.addEventListener('timeupdate', () => {
   progress.style.width = pct + '%';
   tCur.textContent = fmtTime(t);
   renderAudioHud(t);
+  updateStepContext(t);
   highlightActive(t);
 });
 
@@ -790,9 +1031,11 @@ searchInput.addEventListener('input', () => {
   if (!q) {
     filteredAnnotations = annotations;
   } else {
+    const matchedSteps = stepAnnotations.filter(s => String(s.text || '').toLowerCase().includes(q));
     filteredAnnotations = annotations.filter(a => String(a.text || '').toLowerCase().includes(q)
       || String(a.verb || '').toLowerCase().includes(q)
-      || String(a.noun || '').toLowerCase().includes(q));
+      || String(a.noun || '').toLowerCase().includes(q)
+      || matchedSteps.some(s => a.start <= s.stop && a.stop >= s.start));
   }
   renderList(filteredAnnotations);
   refreshStatus();
@@ -802,7 +1045,8 @@ window.addEventListener('resize', updateCaptionSpacers);
 
 // hide video initially
 vid.style.display = 'none';
-setStatus('load a video, HD_EPIC_Narrations (.pkl/.csv), and optional Audio annotations (.csv)');
+renderRecipeOverview(null);
+setStatus('load a video, HD_EPIC_Narrations (.pkl/.csv), and optional Audio annotations (.csv) + Recipes (.json)');
 </script>
 </body>
 </html>
