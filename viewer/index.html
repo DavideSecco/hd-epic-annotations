@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>HD-EPIC Annotation Viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="topbar">
+  <h1>HD-EPIC Viewer</h1>
+  <button class="file-btn" onclick="document.getElementById('video-input').click()">Load video</button>
+  <input type="file" id="video-input" accept="video/*" style="display:none">
+  <span id="video-name">no video loaded</span>
+  <button class="file-btn" onclick="document.getElementById('annotations-input').click()">Load annotations (.pkl/.csv)</button>
+  <input type="file" id="annotations-input" accept=".pkl,.pickle,.csv,application/octet-stream,text/csv" style="display:none">
+  <span id="csv-name">no annotations loaded</span>
+  <button class="file-btn" onclick="document.getElementById('audio-input').click()">Load audio (.csv)</button>
+  <input type="file" id="audio-input" accept=".csv,text/csv" style="display:none">
+  <span id="audio-name">no audio loaded</span>
+  <button class="file-btn" onclick="document.getElementById('recipes-input').click()">Load Recipes (.json)</button>
+  <input type="file" id="recipes-input" accept=".json,application/json" style="display:none">
+  <span id="step-name">no recipes loaded</span>
+  <span id="stats"></span>
+</div>
+
+<div id="main">
+  <div id="video-panel">
+    <div id="video-wrap">
+      <div id="drop-hint">
+        <span class="big">&#9654;</span>
+        <span>Drop a video file here, or use "Load video"</span>
+        <span style="font-size:12px;color:#333">Annotations, audio and recipes load automatically</span>
+      </div>
+      <video id="vid" controls></video>
+      <div id="audio-hud"></div>
+    </div>
+    <div id="timeline-wrap">
+      <div id="timeline-track">
+        <div id="timeline-progress"></div>
+        <svg id="timeline-segments" preserveAspectRatio="none"></svg>
+        <div id="timeline-cursor"></div>
+      </div>
+      <div id="time-labels">
+        <span id="t-start">0:00</span>
+        <span id="t-cur">0:00</span>
+        <span id="t-end">0:00</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="annot-panel">
+    <div id="annot-header">Narrations</div>
+    <div id="step-context">Nessuna macro-fase attiva</div>
+    <div id="search-wrap">
+      <input type="text" id="search" placeholder="Search narrations, audio and recipes steps…">
+    </div>
+    <div id="annot-list"></div>
+    <div id="recipe-overview"></div>
+  </div>
+</div>
+
+<script src="viewer.js"></script>
+</body>
+</html>
