@@ -123,6 +123,19 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
 
 /* legend dots */
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+
+/* object labels (CSS2DRenderer) */
+.obj-label {
+  color: #aaffcc;
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(0,0,0,.55);
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  user-select: none;
+}
 </style>
 </head>
 <body>
@@ -146,8 +159,11 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
       <span class="dot" style="background:#ff4444" style="margin-left:8px"></span><span class="stat">end</span>
     </div>
     <div style="margin-top:4px">
-      <span class="dot" style="background:#ffcc00"></span><span class="stat">object </span>
+      <span class="dot" style="background:#ffcc00"></span><span class="stat">gaze obj </span>
       <span class="dot" style="background:#00ccff"></span><span class="stat">gaze point</span>
+    </div>
+    <div>
+      <span class="dot" style="background:#44ff88"></span><span class="stat">mask objects</span>
     </div>
   </div>
 
@@ -157,6 +173,7 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
     <label class="layer-toggle"><input type="checkbox" id="tog-traj"    checked> Trajectory</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-gaze"    checked> Gaze priming</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-head"    checked> Camera head</label>
+    <label class="layer-toggle"><input type="checkbox" id="tog-objects" checked> Objects</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-grid"    checked> Grid</label>
   </div>
 
@@ -187,16 +204,18 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
 
 <script type="module">
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls }                    from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader }                       from 'three/addons/loaders/GLTFLoader.js';
+import { CSS2DRenderer, CSS2DObject }       from 'three/addons/renderers/CSS2DRenderer.js';
 
 // ════════════════════════════════════════════════════════════════════════════════
 // DATA
 // In the integrated viewer, receive this from outside instead of parsing here.
 // ════════════════════════════════════════════════════════════════════════════════
-const DATA  = JSON.parse(document.getElementById('slam-data').textContent);
-const traj  = DATA.trajectory;   // { t[], x[], y[], z[], qx[], qy[], qz[], qw[] }
-const gaze  = DATA.gaze || null; // { obj_x[], obj_y[], obj_z[], gaze_x[], gaze_y[], gaze_z[] }
+const DATA    = JSON.parse(document.getElementById('slam-data').textContent);
+const traj    = DATA.trajectory;   // { t[], x[], y[], z[], qx[], qy[], qz[], qw[] }
+const gaze    = DATA.gaze || null; // { obj_x[], obj_y[], obj_z[], gaze_x[], gaze_y[], gaze_z[] }
+const objects = DATA.objects || []; // [{ x, y, z, label, fixture }, ...]
 const N     = traj.t.length;
 const T0    = traj.t[0];
 const T1    = traj.t[N - 1];
@@ -260,6 +279,13 @@ renderer.shadowMap.enabled = true;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 container.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(window.innerWidth, window.innerHeight);
+labelRenderer.domElement.style.position = 'absolute';
+labelRenderer.domElement.style.top = '0';
+labelRenderer.domElement.style.pointerEvents = 'none';
+container.appendChild(labelRenderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d0d1c);
@@ -414,6 +440,36 @@ if (gaze && gaze.obj_x.length > 0) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
+// OBJECT MASK POSITIONS
+// Green spheres at the median 3D location of each manipulated object (fixture).
+// Labels via CSS2DRenderer so they scale correctly in 3D space.
+// ════════════════════════════════════════════════════════════════════════════════
+let objGroup = null;
+if (objects.length > 0) {
+  objGroup = new THREE.Group();
+  const objGeom = new THREE.SphereGeometry(0.06, 10, 7);
+  const objMat  = new THREE.MeshBasicMaterial({ color: 0x44ff88, transparent: true, opacity: 0.9 });
+
+  objects.forEach(obj => {
+    const pos = s2t(obj.x, obj.y, obj.z);
+
+    const sphere = new THREE.Mesh(objGeom, objMat);
+    sphere.position.copy(pos);
+    objGroup.add(sphere);
+
+    const div = document.createElement('div');
+    div.className = 'obj-label';
+    div.textContent = obj.label || obj.fixture;
+    const label = new CSS2DObject(div);
+    label.position.set(pos.x, pos.y + 0.12, pos.z);
+    objGroup.add(label);
+  });
+
+  scene.add(objGroup);
+  console.log(`[objects] ${objects.length} fixtures rendered`);
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
 // KITCHEN MODEL (GLB)
 // Loaded without re-centering so world coordinates match SLAM data directly.
 // ════════════════════════════════════════════════════════════════════════════════
@@ -551,6 +607,7 @@ document.getElementById('tog-kitchen').addEventListener('change', (e) => { if (k
 document.getElementById('tog-traj')   .addEventListener('change', (e) => { trajLine.visible = e.target.checked; startMark.visible = e.target.checked; endMark.visible = e.target.checked; });
 document.getElementById('tog-gaze')   .addEventListener('change', (e) => { if (gazeGroup) gazeGroup.visible = e.target.checked; });
 document.getElementById('tog-head')   .addEventListener('change', (e) => { headGroup.visible = e.target.checked; });
+document.getElementById('tog-objects').addEventListener('change', (e) => { if (objGroup) objGroup.visible = e.target.checked; });
 document.getElementById('tog-grid')   .addEventListener('change', (e) => { grid.visible = e.target.checked; });
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -570,12 +627,14 @@ function animate(nowMs) {
 
   controls.update();
   renderer.render(scene, camera);
+  labelRenderer.render(scene, camera);
 }
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  labelRenderer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // Initial state
@@ -644,11 +703,68 @@ def load_gaze_priming(json_path: Path, video_id: str) -> dict | None:
                 gaze_x=gaze_x, gaze_y=gaze_y, gaze_z=gaze_z)
 
 
+def load_object_masks(mask_path: Path, assoc_path: Path | None, video_id: str) -> list[dict]:
+    """Return one entry per unique fixture with median 3D position and human-readable label."""
+    with open(mask_path) as f:
+        mask_data = json.load(f)
+
+    masks_for_video = mask_data.get(video_id, {})
+    if not masks_for_video:
+        print(f"[objects] No mask data for {video_id}")
+        return []
+
+    # Build mask_id → object name from assoc_info (optional)
+    mask_to_name: dict[str, str] = {}
+    if assoc_path and assoc_path.exists():
+        with open(assoc_path) as f:
+            assoc_data = json.load(f)
+        for obj in assoc_data.get(video_id, {}).values():
+            name = obj.get('name', '')
+            for track in obj.get('tracks', []):
+                for mask_id in track.get('masks', []):
+                    mask_to_name[mask_id] = name
+
+    # Group positions by fixture; remember best label per fixture
+    from collections import defaultdict
+    positions: dict[str, list] = defaultdict(list)
+    labels: dict[str, str] = {}
+
+    for mask_id, entry in masks_for_video.items():
+        loc = entry.get('3d_location')
+        fixture = entry.get('fixture', '')
+        if loc is None or not fixture:
+            continue
+        positions[fixture].append(loc)
+        if fixture not in labels:
+            name = mask_to_name.get(mask_id, '')
+            # Fallback: strip participant prefix from fixture name (P01_mug.001 → mug.001)
+            labels[fixture] = name or ('_'.join(fixture.split('_')[1:]) if '_' in fixture else fixture)
+
+    # Median position per fixture
+    result = []
+    for fixture, pts in positions.items():
+        xs = sorted(p[0] for p in pts)
+        ys = sorted(p[1] for p in pts)
+        zs = sorted(p[2] for p in pts)
+        n = len(xs)
+        result.append({
+            'x': round(xs[n // 2], 4),
+            'y': round(ys[n // 2], 4),
+            'z': round(zs[n // 2], 4),
+            'label':   labels[fixture],
+            'fixture': fixture,
+        })
+
+    print(f"[objects] {len(result)} unique fixtures for {video_id}")
+    return result
+
+
 def _r(arr, d=4):
     return [round(v, d) for v in arr]
 
 
-def build_data_json(participant: str, video_id: str, traj: dict, gaze: dict | None) -> str:
+def build_data_json(participant: str, video_id: str, traj: dict,
+                    gaze: dict | None, objects: list[dict]) -> str:
     blob = {
         "participant": participant,
         "video_id":    video_id,
@@ -665,6 +781,8 @@ def build_data_json(participant: str, video_id: str, traj: dict, gaze: dict | No
             "obj_x":  _r(gaze["obj_x"]),  "obj_y":  _r(gaze["obj_y"]),  "obj_z":  _r(gaze["obj_z"]),
             "gaze_x": _r(gaze["gaze_x"]), "gaze_y": _r(gaze["gaze_y"]), "gaze_z": _r(gaze["gaze_z"]),
         }
+    if objects:
+        blob["objects"] = objects
     return json.dumps(blob, separators=(',', ':'))
 
 
@@ -833,7 +951,12 @@ def main():
     if gaze is None:
         print("[gaze] Skipping gaze priming (no path or video_id)")
 
-    data_json = build_data_json(participant or '?', video_id or '', traj, gaze)
+    mask_path  = REPO_ROOT / 'scene-and-object-movements' / 'mask_info.json'
+    assoc_path = REPO_ROOT / 'scene-and-object-movements' / 'assoc_info.json'
+    objects = (load_object_masks(mask_path, assoc_path, video_id)
+               if (mask_path.exists() and video_id) else [])
+
+    data_json = build_data_json(participant or '?', video_id or '', traj, gaze, objects)
     size_kb = len(data_json.encode()) // 1024
     print(f"[data] JSON blob: {size_kb} KB")
 
