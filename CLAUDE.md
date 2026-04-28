@@ -1,5 +1,5 @@
 # HD-EPIC Annotation Viewer — Contesto sessione di lavoro
-> Aggiornato: 24 aprile 2026 (in uni, dataset HPC montato in read-only).
+> Aggiornato: 28 aprile 2026.
 
 ---
 
@@ -177,12 +177,12 @@ L'HTML generato da `view_slam_3d.py` è già strutturato per l'embedding:
 | # | Feature | Sforzo | Dati necessari | Disponibile? |
 |---|---|---|---|---|
 | 1 | **"Hands" badge** su ogni narration (L/R/both) | Minimo | Campo `hands` già nel CSV | ✅ |
-| 2 | **Auto-detect ricetta** dal video ID caricato | Piccolo | `high-level/activities/P0X_recipe_timestamps.csv` | ✅ |
-| 3 | **YouTube link** auto (bottone "Open on YouTube") | Minimo | `youtube-links/HD_EPIC_YouTube_URLs.csv` | ✅ |
+| 2 | **Auto-detect ricetta** dal video ID caricato | Piccolo | `high-level/activities/P0X_recipe_timestamps.csv` | ✅ **FATTO** |
+| 3 | **YouTube link** auto (bottone "Open on YouTube") | Minimo | `youtube-links/HD_EPIC_YouTube_URLs.csv` | ✅ **FATTO** |
 | 4 | **Object movements** in timeline + lista | Medio | `scene-and-object-movements/assoc_info.json` | ✅ |
-| 5 | **"How/Why" clauses** su ogni narration | Medio | `fine_grained_how/why_recognition.json` | ✅ |
+| 5 | **"How/Why" clauses** su ogni narration | Medio | `fine_grained_how/why_recognition.json` | ✅ **FATTO** |
 | 6 | **Nutritional live tracker** (calorie nel tempo) | Medio | `complete_recipes.json` | ✅ |
-| 7 | **VQA panel** — domande al timestamp corrente | Medio | tutti i VQA JSON | ✅ |
+| 7 | **VQA panel** — domande al timestamp corrente | Medio | tutti i VQA JSON | ✅ **FATTO** |
 | 8 | **Digital Twin 3D** integrato nel viewer HTML | Alto | `.glb` da esportare da HPC, salvare in locale | ✅ |
 | 9 | **Gaze points 3D** sovrapposti alla cucina | Alto | `priming_info.json` | ✅ |
 | 10 | **Camera trajectory** (testa persona) nella cucina | Alto | `SLAM/multi/*/slam/closed_loop_trajectory.csv` (HPC) | ✅ HPC |
@@ -240,7 +240,12 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 
 ---
 
-## 7. Stato lavori al 24 aprile 2026
+## 7. Stato lavori al 28 aprile 2026
+
+### Fatto (28 aprile)
+- **YouTube link**: bottone `<a id="yt-btn">` nella topbar, hidden di default, appare appena il video_id è nel CSV. Caricamento in `autoLoadDefaults`. Path: `viewer/index.html` + `viewer/viewer.js` (`youtubeUrls`, `updateYoutubeButton()`).
+- **How/Why clauses**: pills arancioni/viola su narrations con dati VQA. Lookup `howWhyLookup` indicizzato per video_id. Funzioni: `buildHowWhyLookup()`, `findHowWhy()`. Stile in `viewer/style.css` (`.tag-how`, `.tag-why`). Note: dati sparsi (500+500 entry su 156 video, ~5/video), match ±1s.
+- **Activity segments** (#2): 9 CSV `P0X_recipe_timestamps.csv` caricati in parallelo in `autoLoadDefaults`. Corsia viola in cima alla timeline. `step-context` mostra "Attività · Fase". Funzioni: `getActivityAt()`, globals `allActivityData`, `activitySegments`.
 
 ### Fatto (24 aprile)
 - Rinominato `CONTEXT_DOMANI.md` → `CLAUDE.md`
@@ -272,6 +277,9 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 - Timeline multitrack: step / narration / audio
 - Search narrations
 - **Bbox 2D oggetti** sul video (canvas overlay verde): carica `mask_info.json` + `assoc_info.json` automaticamente, mostra rettangolo + etichetta per ogni oggetto rilevato al frame corrente (±15 frame = ±0.5s, FPS=30, risoluzione Aria 1408×1408)
+- **YouTube link**: bottone "▶ YouTube" nella topbar, visibile solo se il video_id ha un URL nel CSV. Si popola automaticamente all'avvio, appare appena si carica il video.
+- **How/Why clauses**: pills arancioni (↳ how) e viola (✦ why) sotto ogni narration che ha un'entry nei JSON VQA `fine_grained_how/why_recognition.json`. Match per video_id + overlap temporale (±1s). Copertura sparsa (~500 entry how + 500 why su 156 video).
+- **Activity segments**: tutti i 9 CSV `high-level/activities/P0X_recipe_timestamps.csv` caricati in parallelo all'avvio → `allActivityData`. Corsia viola in cima alla timeline (sopra step/narration/audio). Label corrente mostrata in `step-context` come "Attività · Fase". Gestisce `end_time = "end"` come ∞. Implementazione: `getActivityAt()`, `allActivityData`, `activitySegments`.
 
 ### Note tecniche bbox overlay
 - FPS assunto 30 (Aria glasses), finestra ±15 frame
@@ -279,30 +287,24 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 - Canvas `#bbox-canvas` sovrapposto al video con z-index:2 (sotto audio HUD)
 - Etichette: da `assoc_info.json` (nome oggetto) con fallback al nome fixture senza prefisso partecipante
 
-### Hand mask overlay (aggiunto 27 aprile 2026) — **WIP, rendering errato**
+### Hand mask overlay (completato 27 aprile 2026) — ✅ FUNZIONA
 
-#### Cosa è stato fatto
-- **Script di estrazione**: `python3 extract_hand_masks.py P01-20240204-152537` → genera `hand-masks/{video_id}.json` (~12 MB)
+#### Architettura attuale
+- **Pre-estrazione offline**: `python3 extract_hand_masks.py P01-20240204-152537` → genera `hand-masks/{video_id}.json` (~12 MB)
   - Formato: `{"frame": {"l": "coco_rle_string", "r": "coco_rle_string"}, ...}` (solo frame non vuoti, chiavi corte)
   - Il file per P01-20240204-152537 è già estratto in `hand-masks/`
-- **Auto-load**: `loadHandMasks(videoId)` usa `res.json()` diretto (NON parseInWorker — vedere sotto)
+- **Auto-load**: `loadHandMasks(videoId)` usa `res.json()` diretto (NON parseInWorker)
 - **Rendering**: `applyRLEToBuffer()` → `_handImgData` (buffer 1408×1408×4 riusato) → `putImageData` → `drawImage` su `bboxCtx`
+- **Sync**: loop `requestAnimationFrame` durante il playback (non `timeupdate` che è solo ~4 Hz); frame-skip cache (`_lastHandFrame`) evita re-decode RLE se il frame video non cambia
 
-#### Bug risolti durante lo sviluppo
-1. **Video freeze da structured clone**: primo tentativo usava `parseInWorker` che mandava il JSON parsato (12.7 MB, 10.963 chiavi) dal worker al main thread via structured clone → blocco di 1-2s. **Fix**: `res.json()` diretto.
-2. **Freeze da canvas API**: secondo tentativo usava `ctx.rect()` per ogni pixel foreground — alcuni frame hanno **1 milione** di pixel foreground (maschere piene, non contorni come si credeva). 1M chiamate `rect()` per frame → freeze totale. **Fix**: approccio ImageData (buffer in RAM, 9ms/frame su frame densi).
+#### Bug risolti (storia)
+1. **Video freeze da structured clone**: `parseInWorker` mandava 12.7 MB via structured clone → blocco 1-2s. **Fix**: `res.json()` diretto.
+2. **Freeze da canvas API**: `ctx.rect()` su 1M pixel foreground per frame → freeze totale. **Fix**: approccio ImageData (~9ms/frame su frame densi).
+3. **Bande verticali invece di sagome**: decoder COCO RLE (`decodeRLECounts`) aveva `more = true` dopo la sign-extension → consumava il primo byte del count successivo, corrompendo tutti i run-length. **Fix**: rimosso `more = true` (una riga).
+4. **Mask non sincronizzata col video**: `timeupdate` scatta ~4 Hz, video a 30 FPS → mask "salta" ogni ~8 frame. **Fix**: rAF loop durante playback.
 
-#### Stato attuale: funziona senza freeze, ma il rendering è ERRATO
-- Il video non si blocca più
-- Vengono visualizzate **bande verticali** più o meno dense (blu/rosse), non sagome di mani
-- **Causa probabile**: bug nel decoder COCO RLE o nella mappatura colonna-maggiore → riga-maggiore per ImageData
-  - Il decoder `decodeRLECounts()` produce valori negativi per alcuni run (confermato, gestito con `while (run-- > 0)`)
-  - La mappatura pixel: `col-major index i → col = i÷H, row = i%H` → `buf[(row*W + col)*4]`
-  - Le bande verticali suggeriscono che la dimensione usata per H e W potrebbe essere invertita, oppure che la struttura dati del JSON ha un problema di ordinamento
-- **Da investigare nella prossima sessione**:
-  1. Verificare con pycocotools che il decoder JS produca la stessa maschera
-  2. Controllare se H e W sono nell'ordine giusto (`size = [H, W] = [1408, 1408]` — in questo caso sono uguali, ma la formula `col = flat_idx ÷ H` va verificata)
-  3. Eventualmente: usare pycocotools in Python per pre-decodificare un frame campione e confrontare pixel per pixel
+#### TODO (bloccato da permessi di scrittura — da fare quando disponibili)
+**Estrazione on-the-fly**: eliminare il pre-processing offline. Il viewer dovrebbe leggere direttamente da `contours_preds.zip` senza creare file intermedi. Richiede un endpoint API in `serve_viewer.py` (es. `GET /hand-masks/{video_id}/{frame}` o `/hand-masks/{video_id}`) che legge il zip HPC al volo e restituisce il JSON compatto. Attualmente bloccato: permessi di scrittura non disponibili per salvare i JSON estratti in `hand-masks/`.
 
 ### Cosa c'è già nel viewer 3D SLAM (`view_slam_3d.py`)
 - Traiettoria SLAM + cono di visione quaternionico
@@ -310,13 +312,43 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 - **Sfere verdi** per oggetti manipolati nel video (da `mask_info.json`, posizione mediana 3D, etichetta CSS2D)
 - Layer toggle per ogni layer
 
+### Visualizzazioni 3D aggiuntive fattibili (ispirate al paper CVPR 2025)
+
+Il paper HD-EPIC mostra una figura "Digital twin: Scene & Object Movements" con 4 layer sovrapposti nella stessa scena 3D. Tutti i dati necessari sono disponibili:
+
+| Layer | Dati | Implementazione |
+|---|---|---|
+| **Point cloud** | `semidense_points.csv.gz` (HPC, 46 MB gzip) — colonne `px_world, py_world, pz_world` in world space | `THREE.Points` subsampliato, stesso transform SLAM `(x,y,z)→(x,z,-y)` |
+| **Surface mesh** | GLB da `.blend` | ✅ già presente |
+| **Frecce movimento oggetti** | `assoc_info.json` + `mask_info.json` | `THREE.ArrowHelper` tra `3d_location` prima/ultima mask di ogni track |
+| **Sagome 3D oggetti** | "37K object masks lifted to 3D" — **non in nostra copia locale** | ❌ non disponibile |
+
+#### Come costruire le frecce di movimento
+
+```python
+# Per ogni oggetto in assoc_info[video_id]:
+#   Per ogni track dell'oggetto:
+#     start_loc = mask_info[video_id][track.masks[0]]['3d_location']
+#     end_loc   = mask_info[video_id][track.masks[-1]]['3d_location']
+#     fixture_start = mask_info[video_id][track.masks[0]]['fixture']
+#     fixture_end   = mask_info[video_id][track.masks[-1]]['fixture']
+#   → ArrowHelper da start_loc a end_loc, colorato per oggetto
+#   → Label: "{obj.name}: {fixture_start} → {fixture_end}"
+#   → Filtrabile per time_segment (mostra solo se nel range temporale corrente)
+```
+
+Esempio reale (P01-20240202-110250, "juicer bowl"):
+- `mask_info[masks[0]]` → fixture `P01_counter.008`, 3d `[-1.64, -2.85, -0.44]`
+- `mask_info[masks[-1]]` → fixture `P01_counter.004`, 3d `[-0.16, -3.88, -0.52]`
+
+- **VQA panel** (#7): panel `#vqa-panel` tra step-context e search. Carica 4 file JSON via worker: `gaze_gaze_estimation` (1K), `gaze_interaction_anticipation` (1K), `ingredient_ingredient_weight` (50), `nutrition_nutrition_change` (50). Lookup `vqaLookup` per video_id. `renderVqaPanel(t)` nel tick `timeupdate`. Categorie con badge colorati (cyan/amber/verde/rosso). Risposta corretta evidenziata in verde (✓). `fine_grained_action_recognition` (14MB) escluso — troppo pesante. Testo pulito da `<TIME>` e `<BBOX>` tags.
+
 ### Cosa NON c'è ancora
-- **Hand mask overlay "piena"** — i dati in `contours_preds.zip` sono contorni (pochi pixel), non maschere piene. Per maschere piene bisognerebbe flood-fill in JS (non implementato)
+- **Hand mask on-the-fly** — attualmente richiede pre-estrazione offline (`extract_hand_masks.py`); bloccato da permessi di scrittura su HPC (vedi TODO in §7)
 - **Hands badge** su ogni narration — poco informativo
 - **Ingredienti con timestamp** (add/weigh)
 - **Nutritional live tracker** — calorie accumulate nel tempo
 - **Object movements in timeline** — `assoc_info.json` ha segmenti temporali
-- **How/Why clauses** su ogni narration — dai JSON VQA
 - **VQA panel** — domande attive al timestamp corrente
 - **Integrazione viewer SLAM** nel viewer HTML come pannello
 - **Eye gaze per-frame** nel viewer SLAM (da `general_eye_gaze.csv`, richiede allineamento temporale)
