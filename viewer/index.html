@@ -12,6 +12,7 @@
   <button class="file-btn" onclick="document.getElementById('video-input').click()">Load video</button>
   <input type="file" id="video-input" accept="video/*" style="display:none">
   <span id="video-name">no video loaded</span>
+  <a id="yt-btn" class="file-btn" href="#" target="_blank" rel="noopener" style="display:none">&#9654; YouTube</a>
   <button class="file-btn" onclick="document.getElementById('annotations-input').click()">Load annotations (.pkl/.csv)</button>
   <input type="file" id="annotations-input" accept=".pkl,.pickle,.csv,application/octet-stream,text/csv" style="display:none">
   <span id="csv-name">no annotations loaded</span>
@@ -33,6 +34,7 @@
         <span style="font-size:12px;color:#333">Annotations, audio and recipes load automatically</span>
       </div>
       <video id="vid" controls></video>
+      <canvas id="bbox-canvas"></canvas>
       <div id="audio-hud"></div>
     </div>
     <div id="timeline-wrap">
@@ -46,17 +48,26 @@
         <span id="t-cur">0:00</span>
         <span id="t-end">0:00</span>
       </div>
+      <div id="timeline-legend">
+        <span class="leg-item"><span class="leg-dot" style="background:#9333ea"></span>Activity</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#3b82f6"></span>Recipe step</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#2a5"></span>Narration</span>
+        <span class="leg-item"><span class="leg-dot" style="background:#f5a623"></span>Audio</span>
+      </div>
     </div>
   </div>
 
   <div id="annot-panel">
-    <div id="annot-header">Narrations</div>
-    <div id="step-context">Nessuna macro-fase attiva</div>
-    <div id="search-wrap">
-      <input type="text" id="search" placeholder="Search narrations, audio and recipes steps…">
+    <div id="annot-header">Narrations <button class="sec-toggle" data-sec="narrations" title="Collapse/expand">▾</button></div>
+    <div id="narrations-body">
+      <div id="step-context">Nessuna macro-fase attiva</div>
+      <div id="search-wrap">
+        <input type="text" id="search" placeholder="Search narrations, audio and recipes steps…">
+      </div>
+      <div id="annot-list"></div>
     </div>
-    <div id="annot-list"></div>
     <div id="recipe-overview"></div>
+    <div id="vqa-panel"></div>
   </div>
 </div>
 

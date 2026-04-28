@@ -4,7 +4,7 @@
   /* --- Top bar --- */
   #topbar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; background: #1a1a1a; border-bottom: 1px solid #333; flex-shrink: 0; }
   #topbar h1 { font-size: 14px; font-weight: 600; color: #aaa; white-space: nowrap; }
-  .file-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; white-space: nowrap; }
+  .file-btn { font-size: 12px; padding: 5px 12px; border-radius: 6px; border: 1px solid #444; background: #222; color: #ccc; cursor: pointer; white-space: nowrap; text-decoration: none; display: inline-block; }
   .file-btn:hover { background: #2a2a2a; border-color: #666; }
   #video-name { font-size: 12px; color: #666; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #csv-name, #audio-name, #step-name { font-size: 12px; color: #666; }
@@ -17,6 +17,12 @@
   #video-panel { flex: 0 0 50%; display: flex; flex-direction: column; background: #090909; min-width: 0; min-height: 0; }
   #video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #090909; position: relative; padding: 0; overflow: hidden; min-height: 0; }
   video { width: 100%; height: auto; max-width: 100%; max-height: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; }
+  #bbox-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    pointer-events: none;
+    z-index: 2;
+  }
   #audio-hud {
     position: absolute;
     left: 14px;
@@ -71,10 +77,26 @@
   #timeline-segments { position: absolute; top: 4px; left: 0; height: 32px; width: 100%; pointer-events: none; }
   #timeline-cursor { position: absolute; top: 0; width: 2px; background: #fff; height: 100%; pointer-events: none; }
   #time-labels { display: flex; justify-content: space-between; font-size: 10px; color: #555; margin-top: 4px; }
+  #timeline-legend { display: flex; gap: 12px; margin-top: 5px; }
+  .leg-item { display: flex; align-items: center; gap: 4px; font-size: 9px; color: #555; }
+  .leg-dot { width: 8px; height: 5px; border-radius: 1px; flex-shrink: 0; }
 
   /* --- Annotation panel --- */
   #annot-panel { flex: 0 0 50%; min-width: 0; width: auto; display: flex; flex-direction: column; background: #141414; border-left: 1px solid #2a2a2a; min-height: 0; }
-  #annot-header { padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 12px; color: #888; font-weight: 500; }
+  #annot-header { padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 12px; color: #888; font-weight: 500; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+
+  /* Section toggle button */
+  .sec-toggle { background: none; border: none; color: #555; cursor: pointer; font-size: 11px; padding: 0 2px; line-height: 1; transition: transform 0.15s; }
+  .sec-toggle:hover { color: #aaa; }
+  .sec-toggle.sec-closed { transform: rotate(-90deg); }
+
+  /* Narrations body */
+  #narrations-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #narrations-body.sec-collapsed { flex: 0 0 0; }
+
+  /* When narrations collapsed → recipe expands */
+  #narrations-body.sec-collapsed ~ #recipe-overview { flex: 1; max-height: none; }
+
   #annot-list {
     --caption-size-base: clamp(0.95rem, 1.05vw, 1.25rem);
     --caption-size-active: clamp(1.2rem, 1.55vw, 1.65rem);
@@ -91,15 +113,20 @@
     min-height: 0;
     overflow-y: auto;
     border-top: 1px solid #2a2a2a;
-    padding: 12px 14px;
+    padding: 0;
     background: #0f0f0f;
-    font-size: 12px;
+    font-size: 13px;
     color: #aaa;
   }
+  #recipe-overview.sec-collapsed { flex: 0 0 auto; max-height: none; overflow: hidden; }
+  #recipe-overview.sec-collapsed .sec-body { display: none; }
+  #recipe-overview .sec-body { padding: 10px 14px 14px; }
+  .sec-header-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; position: sticky; top: 0; background: #0f0f0f; border-bottom: 1px solid #1e1e1e; }
+  .sec-label { font-size: 12px; font-weight: 600; color: #ccc; }
   #recipe-overview h2 {
     margin: 0 0 8px;
     color: #f5f5f5;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
     line-height: 1.25;
   }
@@ -120,8 +147,9 @@
     padding-top: 4px;
   }
   #recipe-overview li {
-    margin-bottom: 4px;
-    line-height: 1.35;
+    margin-bottom: 6px;
+    line-height: 1.4;
+    font-size: 13px;
   }
   #recipe-overview .recipe-empty {
     color: #666;
@@ -163,20 +191,52 @@
   .tag-n { display: inline-block; background: #1a2038; color: #60a5fa; border-radius: 4px; padding: 0.18em 0.58em; font-size: var(--tag-size-base); line-height: 1.2; }
   .annot-item.active .tag-v,
   .annot-item.active .tag-n { font-size: var(--tag-size-active); }
+  .annot-howwhy { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .tag-how { display: inline-block; background: #2a1f10; color: #fb923c; border-radius: 4px; padding: 0.15em 0.5em; font-size: 10px; line-height: 1.3; max-width: 100%; }
+  .tag-why { display: inline-block; background: #1e1a2e; color: #c084fc; border-radius: 4px; padding: 0.15em 0.5em; font-size: 10px; line-height: 1.3; max-width: 100%; }
+
+  /* --- VQA Panel --- */
+  #vqa-panel { display: none; flex: 0 0 auto; max-height: 320px; overflow-y: auto; border-top: 1px solid #2a2a2a; background: #0d0d0d; }
+  #vqa-panel.has-questions { display: block; }
+  #vqa-panel.sec-collapsed { max-height: none; overflow: hidden; }
+  #vqa-panel.sec-collapsed .sec-body { display: none; }
+  .vqa-header { padding: 6px 14px; font-size: 11px; font-weight: 600; color: #666; background: #111; border-bottom: 1px solid #1e1e1e; position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; }
+  .vqa-card { padding: 7px 14px; border-bottom: 1px solid #1a1a1a; cursor: pointer; }
+  .vqa-card:hover { background: #161616; }
+  .vqa-card.vqa-active { background: #12181f; border-left: 2px solid #38bdf8; padding-left: 12px; }
+  .vqa-card:last-child { border-bottom: none; }
+  .vqa-card-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+  .vqa-badge { display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
+  .vqa-window { font-size: 10px; color: #555; font-variant-numeric: tabular-nums; }
+  .vqa-dur { color: #444; margin-left: 3px; }
+  .vqa-q { font-size: 12px; color: #ccc; line-height: 1.45; margin-bottom: 5px; }
+  .vqa-choices { display: flex; flex-direction: column; gap: 3px; }
+  .vqa-choice { font-size: 11px; padding: 3px 8px; border-radius: 3px; color: #666; background: #1a1a1a; display: flex; align-items: baseline; gap: 4px; }
+  .vqa-choice.correct { color: #4ade80; background: #0d2016; font-weight: 600; }
+  .vqa-idx { font-size: 9px; color: #444; font-weight: 700; flex-shrink: 0; }
 
   /* --- Search --- */
   #step-context {
     position: sticky;
     top: 0;
     z-index: 10;
-    padding: 10px 14px;
+    padding: 8px 14px;
     border-bottom: 2px solid #3b82f6;
     background: #141414;
     color: #dbeafe;
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
-    line-height: 1.3;
+    line-height: 1.4;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
   }
+  .ctx-act, .ctx-step { display: flex; align-items: baseline; gap: 6px; }
+  .ctx-dot { width: 7px; height: 7px; border-radius: 1px; flex-shrink: 0; position: relative; top: 0px; display: inline-block; }
+  .ctx-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; white-space: nowrap; flex-shrink: 0; }
+  .ctx-act { color: #d8b4fe; }
+  .ctx-step { color: #bfdbfe; }
+  .ctx-empty { color: #555; font-weight: 400; font-size: 12px; }
   #search-wrap { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; }
   #search { width: 100%; padding: 5px 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; color: #eee; font-size: 12px; }
   #search::placeholder { color: #555; }

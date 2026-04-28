@@ -1,4 +1,6 @@
 const vid = document.getElementById('vid');
+const bboxCanvas = document.getElementById('bbox-canvas');
+const bboxCtx = bboxCanvas.getContext('2d');
 const dropHint = document.getElementById('drop-hint');
 const timelineTrack = document.getElementById('timeline-track');
 const timelineSvg = document.getElementById('timeline-segments');
@@ -13,6 +15,26 @@ const tStart = document.getElementById('t-start');
 const tCur = document.getElementById('t-cur');
 const tEnd = document.getElementById('t-end');
 
+// ---- Object mask state ----
+let allMaskData  = null;
+let allAssocData = null;
+let masksByFrame = [];   // [{frame, bbox, label}] for current video, sorted by frame
+const MASK_FPS   = 30;
+const MASK_TOL   = 15;  // ±15 frames window (~±0.5 s)
+
+// ---- Hand mask state ----
+let handMaskData = null;  // {frame_str: {l?: counts_str, r?: counts_str}}
+const HAND_W = 1408, HAND_H = 1408;
+let _lastHandFrame = -1;   // frame-skip cache: avoid re-decoding same frame
+let _maskRafId = null;
+// Off-screen compositing for hand masks (reuse buffers to avoid GC and stay fast even
+// with dense masks — some frames have >1M foreground pixels).
+const _handCanvas = document.createElement('canvas');
+_handCanvas.width = HAND_W; _handCanvas.height = HAND_H;
+const _handCtx    = _handCanvas.getContext('2d');
+const _handImgData = _handCtx.createImageData(HAND_W, HAND_H);
+const _handBuf    = _handImgData.data;  // Uint8ClampedArray, same underlying buffer
+
 let allAnnotations = [];
 let annotations = [];
 let allAudioAnnotations = [];
@@ -22,6 +44,11 @@ let mergedAnnotations = [];
 let filteredAnnotations = [];
 let activeIdx = -1;
 let currentVideoId = '';
+let youtubeUrls = {};
+let howWhyLookup = {};
+let allActivityData = {};
+let activitySegments = [];
+let vqaLookup = {};
 let rawRecipesJson = null;
 let currentRecipeMeta = null;
 
@@ -189,6 +216,48 @@ function extractVideoId(filename) {
   return String(filename || '').replace(/\.[^.]+$/, '');
 }
 
+function updateYoutubeButton() {
+  const btn = document.getElementById('yt-btn');
+  const url = youtubeUrls[currentVideoId];
+  if (url) {
+    btn.href = url;
+    btn.style.display = '';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+// ---- Collapsible sections ----
+const _secState = JSON.parse(localStorage.getItem('hd-epic-sections') || '{}');
+
+function applySectionState(name) {
+  const collapsed = !!_secState[name];
+  if (name === 'narrations') {
+    document.getElementById('narrations-body').classList.toggle('sec-collapsed', collapsed);
+  } else if (name === 'recipe') {
+    document.getElementById('recipe-overview').classList.toggle('sec-collapsed', collapsed);
+  } else if (name === 'vqa') {
+    document.getElementById('vqa-panel').classList.toggle('sec-collapsed', collapsed);
+  }
+  document.querySelectorAll(`.sec-toggle[data-sec="${name}"]`).forEach(btn => {
+    btn.textContent = collapsed ? '▸' : '▾';
+    btn.classList.toggle('sec-closed', collapsed);
+  });
+}
+
+function toggleSection(name) {
+  _secState[name] = !_secState[name];
+  localStorage.setItem('hd-epic-sections', JSON.stringify(_secState));
+  applySectionState(name);
+}
+
+// Wire narrations toggle (static in HTML)
+document.querySelector('.sec-toggle[data-sec="narrations"]')
+  .addEventListener('click', () => toggleSection('narrations'));
+
+// Apply saved states on load
+['narrations', 'recipe', 'vqa'].forEach(applySectionState);
+
 function refreshStatus() {
   if (!allAnnotations.length && !allAudioAnnotations.length && !rawRecipesJson) {
     setStatus('load HD_EPIC_Narrations (.pkl/.csv), Audio annotations (.csv), and Recipes (.json)');
@@ -203,6 +272,275 @@ function refreshStatus() {
 
 function clearCurrentAnnotation() {
   // Duplicate top-caption panel removed; keep no-op to preserve flow.
+}
+
+// ---- Object mask bbox overlay ----
+function buildMaskLookup(videoId) {
+  masksByFrame = [];
+  if (!allMaskData) return;
+
+  // mask_id → human label from assoc_info
+  const maskIdToLabel = {};
+  if (allAssocData) {
+    for (const obj of Object.values(allAssocData[videoId] || {})) {
+      const name = obj.name || '';
+      for (const track of obj.tracks || [])
+        for (const mid of track.masks || [])
+          maskIdToLabel[mid] = name;
+    }
+  }
+
+  for (const [mid, entry] of Object.entries(allMaskData[videoId] || {})) {
+    const fixture = entry.fixture || '';
+    const label = maskIdToLabel[mid] ||
+      (fixture.includes('_') ? fixture.split('_').slice(1).join('_') : fixture);
+    masksByFrame.push({ frame: entry.frame_number, bbox: entry.bbox, label });
+  }
+  masksByFrame.sort((a, b) => a.frame - b.frame);
+}
+
+function parseHmsToS(hms) {
+  const [h, m, s] = hms.split(':');
+  return +h * 3600 + +m * 60 + parseFloat(s);
+}
+
+function buildHowWhyLookup(howJson, whyJson) {
+  howWhyLookup = {};
+  const add = (entries, type) => {
+    for (const entry of Object.values(entries)) {
+      const vid = entry.inputs?.['video 1']?.id;
+      const startS = parseHmsToS(entry.inputs?.['video 1']?.start_time || '0:0:0');
+      const endS   = parseHmsToS(entry.inputs?.['video 1']?.end_time   || '0:0:0');
+      const text   = entry.choices?.[entry.correct_idx] ?? '';
+      const m = entry.question?.match(/<([^>]+)>/);
+      const action = m ? m[1] : '';
+      if (!vid || !text) continue;
+      (howWhyLookup[vid] ||= []).push({ startS, endS, type, text, action });
+    }
+  };
+  add(howJson, 'how');
+  add(whyJson, 'why');
+}
+
+function findHowWhy(videoId, startS, endS) {
+  const entries = howWhyLookup[videoId];
+  if (!entries) return null;
+  const matches = entries.filter(e =>
+    e.startS <= endS + 1 && e.endS >= startS - 1
+  );
+  if (!matches.length) return null;
+  const how = matches.find(e => e.type === 'how');
+  const why = matches.find(e => e.type === 'why');
+  return (how || why) ? { how, why } : null;
+}
+
+// ---- VQA panel ----
+const VQA_CATEGORIES = {
+  gaze_gaze_estimation:         { label: 'Gaze',        color: '#0e7490', text: '#67e8f9' },
+  gaze_interaction_anticipation:{ label: 'Anticipation', color: '#92400e', text: '#fcd34d' },
+  ingredient_ingredient_weight: { label: 'Ingredient',   color: '#065f46', text: '#6ee7b7' },
+  nutrition_nutrition_change:   { label: 'Nutrition',    color: '#7f1d1d', text: '#fca5a5' },
+};
+
+function buildVqaLookup(entries, category) {
+  for (const entry of Object.values(entries)) {
+    const vid = entry.inputs?.['video 1']?.id;
+    const startS = parseHmsToS(entry.inputs?.['video 1']?.start_time || '0:0:0');
+    const endS   = parseHmsToS(entry.inputs?.['video 1']?.end_time   || '0:0:0');
+    if (!vid) continue;
+    (vqaLookup[vid] ||= []).push({
+      startS, endS, category,
+      question: entry.question || '',
+      choices:  entry.choices  || [],
+      correct:  entry.correct_idx ?? -1,
+    });
+  }
+}
+
+function cleanVqaText(s) {
+  return s
+    .replace(/<TIME [^>]+>/g, '[timestamp]')
+    .replace(/<BBOX [^>]+>/g, '[object]')
+    .replace(/video 1/g, 'the video');
+}
+
+const vqaPanel = document.getElementById('vqa-panel');
+let _vqaSorted = [];
+
+function renderVqaList(videoId) {
+  _vqaSorted = [];
+  const entries = vqaLookup[videoId];
+  if (!entries || !entries.length) {
+    vqaPanel.innerHTML = '';
+    vqaPanel.classList.remove('has-questions');
+    return;
+  }
+  _vqaSorted = [...entries].sort((a, b) => a.startS - b.startS);
+
+  const collapsed = !!_secState['vqa'];
+  const cards = _vqaSorted.map((e, i) => {
+    const cat = VQA_CATEGORIES[e.category] || { label: e.category, color: '#374151', text: '#9ca3af' };
+    const dur = (e.endS - e.startS).toFixed(2);
+    const choicesHtml = e.choices.map((c, j) =>
+      `<div class="vqa-choice${j === e.correct ? ' correct' : ''}">${j === e.correct ? '✓ ' : `<span class="vqa-idx">${String.fromCharCode(65+j)}</span> `}${c}</div>`
+    ).join('');
+    return `<div class="vqa-card" data-idx="${i}" data-start="${e.startS}" data-end="${e.endS}">
+      <div class="vqa-card-meta">
+        <span class="vqa-badge" style="background:${cat.color};color:${cat.text}">${cat.label}</span>
+        <span class="vqa-window">${fmtTime(e.startS)} → ${fmtTime(e.endS)} <span class="vqa-dur">${dur}s</span></span>
+      </div>
+      <div class="vqa-q">${cleanVqaText(e.question)}</div>
+      <div class="vqa-choices">${choicesHtml}</div>
+    </div>`;
+  }).join('');
+
+  vqaPanel.innerHTML =
+    `<div class="vqa-header">VQA · ${_vqaSorted.length} question${_vqaSorted.length > 1 ? 's' : ''}<button class="sec-toggle" data-sec="vqa">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-body">${cards}</div>`;
+  vqaPanel.classList.add('has-questions');
+  vqaPanel.classList.toggle('sec-collapsed', collapsed);
+  vqaPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('vqa'));
+
+  vqaPanel.querySelectorAll('.vqa-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const s = parseFloat(card.dataset.start);
+      if (vid.duration) vid.currentTime = s;
+    });
+  });
+}
+
+function renderVqaPanel(t) {
+  if (!_vqaSorted.length || _secState['vqa']) return;
+  let activeCard = null;
+  vqaPanel.querySelectorAll('.vqa-card').forEach((card, i) => {
+    const e = _vqaSorted[i];
+    const isActive = !!e && e.startS <= t && e.endS >= t;
+    card.classList.toggle('vqa-active', isActive);
+    if (isActive) activeCard = card;
+  });
+  if (activeCard) activeCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function syncBboxCanvas() {
+  const wRect = videoWrap.getBoundingClientRect();
+  bboxCanvas.width  = Math.round(wRect.width);
+  bboxCanvas.height = Math.round(wRect.height);
+}
+
+// ---- COCO RLE decoder ----
+function decodeRLECounts(s) {
+  const cnts = [];
+  let i = 0;
+  while (i < s.length) {
+    let x = 0, k = 0, more = true;
+    while (more) {
+      const c = s.charCodeAt(i++) - 48;
+      more = !!(c & 32);
+      x |= (c & 31) << (5 * k++);
+      if (!more && (c & 16)) x |= (-1 << (5 * k));
+    }
+    if (cnts.length > 2) x += cnts[cnts.length - 2];
+    cnts.push(x);
+  }
+  return cnts;
+}
+
+// Write COCO RLE foreground pixels into a reused Uint8ClampedArray (RGBA, row-major).
+// COCO masks are column-major: flat index i → col = i÷H, row = i%H.
+function applyRLEToBuffer(cnts, H, W, r, g, b, a, buf) {
+  let col = 0, row = 0;
+  for (let ci = 0; ci < cnts.length; ci++) {
+    let run = cnts[ci];
+    if (ci & 1) {
+      // foreground — write pixel colour for each run pixel
+      while (run-- > 0) {
+        const px = (row * W + col) * 4;
+        buf[px] = r; buf[px + 1] = g; buf[px + 2] = b; buf[px + 3] = a;
+        if (++row >= H) { row = 0; col++; }
+      }
+    } else if (run > 0) {
+      // background — skip in O(1), no loop
+      row += run;
+      col += Math.floor(row / H);
+      row %= H;
+    }
+  }
+}
+
+function renderHandMasks(currentTime, offX, offY, vidW, vidH) {
+  if (!handMaskData || !vid.videoWidth) return;
+  const frameNum = Math.round(currentTime * MASK_FPS);
+
+  if (frameNum !== _lastHandFrame) {
+    _lastHandFrame = frameNum;
+    // Search within ±MASK_TOL frames for the closest available frame
+    let best = null;
+    for (let df = 0; df <= MASK_TOL; df++) {
+      const kp = String(frameNum + df), km = String(frameNum - df);
+      if (handMaskData[kp]) { best = handMaskData[kp]; break; }
+      if (df > 0 && handMaskData[km]) { best = handMaskData[km]; break; }
+    }
+    _handBuf.fill(0);
+    if (best) {
+      if (best.l) applyRLEToBuffer(decodeRLECounts(best.l), HAND_H, HAND_W, 80, 160, 255, 160, _handBuf);
+      if (best.r) applyRLEToBuffer(decodeRLECounts(best.r), HAND_H, HAND_W, 255, 80,  80,  160, _handBuf);
+    }
+    _handCtx.putImageData(_handImgData, 0, 0);
+  }
+
+  // Always composite onto bboxCtx (clearRect in renderMaskBoxes erases it each tick)
+  bboxCtx.drawImage(_handCanvas, offX, offY, vidW, vidH);
+}
+
+function renderMaskBoxes(currentTime) {
+  bboxCtx.clearRect(0, 0, bboxCanvas.width, bboxCanvas.height);
+  if (!vid.videoWidth) return;
+
+  const vRect = vid.getBoundingClientRect();
+  const wRect = videoWrap.getBoundingClientRect();
+  const offX   = vRect.left - wRect.left;
+  const offY   = vRect.top  - wRect.top;
+  const scaleX = vRect.width  / vid.videoWidth;
+  const scaleY = vRect.height / vid.videoHeight;
+
+  renderHandMasks(currentTime, offX, offY, vRect.width, vRect.height);
+
+  if (!masksByFrame.length) return;
+  const currentFrame = Math.round(currentTime * MASK_FPS);
+  bboxCtx.lineWidth = 2;
+  bboxCtx.font = 'bold 11px monospace';
+
+  for (const { frame, bbox, label } of masksByFrame) {
+    if (Math.abs(frame - currentFrame) > MASK_TOL) continue;
+    const [x1, y1, x2, y2] = bbox;
+    const rx = offX + x1 * scaleX, ry = offY + y1 * scaleY;
+    const rw = (x2 - x1) * scaleX,  rh = (y2 - y1) * scaleY;
+
+    bboxCtx.strokeStyle = '#44ff88';
+    bboxCtx.strokeRect(rx, ry, rw, rh);
+
+    const tw = bboxCtx.measureText(label).width;
+    bboxCtx.fillStyle = 'rgba(0,0,0,.6)';
+    bboxCtx.fillRect(rx, ry - 16, tw + 8, 16);
+    bboxCtx.fillStyle = '#44ff88';
+    bboxCtx.fillText(label, rx + 4, ry - 3);
+  }
+}
+
+async function loadHandMasks(videoId) {
+  if (!videoId) { handMaskData = null; return; }
+  const targetId = videoId;
+  try {
+    const url = `../hand-masks/${encodeURIComponent(videoId)}.json`;
+    const res = await fetch(url);
+    if (!res.ok) { handMaskData = null; return; }  // 404 = not extracted yet
+    // Parse directly via browser's native JSON parser — avoids worker structured-clone
+    // overhead (~13 MB object round-trip would freeze the main thread for 1-2 s).
+    handMaskData = await res.json();
+    if (currentVideoId === targetId) renderMaskBoxes(vid.currentTime || 0);
+  } catch (e) {
+    handMaskData = null;
+  }
 }
 
 function applyVideoFilter() {
@@ -253,9 +591,12 @@ function applyVideoFilter() {
 
   filteredAnnotations = annotations;
   activeIdx = -1;
+  buildMaskLookup(currentVideoId);
+  loadHandMasks(currentVideoId);  // async, non-blocking
   renderList(filteredAnnotations);
   renderRecipeOverview(currentRecipeMeta);
   renderAudioHud(vid.currentTime || 0);
+  renderMaskBoxes(vid.currentTime || 0);
   updateStepContext(vid.currentTime || 0);
   buildTimeline();
   clearCurrentAnnotation();
@@ -523,26 +864,27 @@ function extractStepsForVideo(videoId) {
 }
 
 function renderRecipeOverview(meta) {
+  const collapsed = !!_secState['recipe'];
   if (!meta) {
-    recipeOverview.innerHTML = '<div class="recipe-empty">Nessuna ricetta associata</div>';
-    return;
+    recipeOverview.innerHTML =
+      `<div class="sec-header-row"><span class="sec-label">Recipe</span><button class="sec-toggle" data-sec="recipe">${collapsed ? '▸' : '▾'}</button></div>` +
+      `<div class="sec-body"><div class="recipe-empty">Nessuna ricetta associata</div></div>`;
+  } else {
+    const safeName = String(meta.name || 'Ricetta').trim();
+    const safeSource = String(meta.source || '').trim();
+    const stepValues = Object.values(meta.steps || {}).map(v => String(v || '').trim()).filter(Boolean);
+    const listHtml = stepValues.length
+      ? `<ol>${stepValues.map(step => `<li>${step}</li>`).join('')}</ol>`
+      : '<div class="recipe-empty">Nessuno step disponibile</div>';
+    const sourceHtml = safeSource
+      ? `<div class="recipe-source">Sorgente: <a href="${safeSource}" target="_blank" rel="noopener noreferrer">Link Ricetta originale</a></div>`
+      : '<div class="recipe-source">Sorgente non disponibile</div>';
+    recipeOverview.innerHTML =
+      `<div class="sec-header-row"><span class="sec-label">${safeName}</span><button class="sec-toggle" data-sec="recipe">${collapsed ? '▸' : '▾'}</button></div>` +
+      `<div class="sec-body">${sourceHtml}${listHtml}</div>`;
   }
-
-  const safeName = String(meta.name || 'Ricetta').trim();
-  const safeSource = String(meta.source || '').trim();
-  const stepValues = Object.values(meta.steps || {}).map(v => String(v || '').trim()).filter(Boolean);
-  const listHtml = stepValues.length
-    ? `<ol>${stepValues.map(step => `<li>${step}</li>`).join('')}</ol>`
-    : '<div class="recipe-empty">Nessuno step disponibile</div>';
-  const sourceHtml = safeSource
-    ? `<div class="recipe-source">Sorgente: <a href="${safeSource}" target="_blank" rel="noopener noreferrer">Link Ricetta originale</a></div>`
-    : '<div class="recipe-source">Sorgente non disponibile</div>';
-
-  recipeOverview.innerHTML = `
-    <h2>${safeName}</h2>
-    ${sourceHtml}
-    ${listHtml}
-  `;
+  recipeOverview.classList.toggle('sec-collapsed', collapsed);
+  recipeOverview.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('recipe'));
 }
 
 function getActiveStepAt(currentTime) {
@@ -558,21 +900,30 @@ function getActiveStepAt(currentTime) {
   return activeStep;
 }
 
+function getActivityAt(t) {
+  return activitySegments.find(a => a.start <= t && (isNaN(a.end) || a.end >= t)) || null;
+}
+
 let _lastStepContextText = null;
 
 function updateStepContext(currentTime) {
   const activeStep = getActiveStepAt(currentTime);
-  let label, color;
-  if (!activeStep) {
-    label = 'Nessuna macro-fase attiva'; color = '#3b82f6';
-  } else if (activeStep.type === 'prep') {
-    label = `Prep: ${activeStep.text}`; color = '#0ea5e9';
+  const activeAct  = getActivityAt(currentTime);
+
+  let html, color;
+  if (!activeStep && !activeAct) {
+    html = '<span class="ctx-empty">No active phase</span>';
+    color = '#3b82f6';
   } else {
-    label = `Fase: ${activeStep.text}`; color = '#3b82f6';
+    const parts = [];
+    if (activeAct)  parts.push(`<span class="ctx-act"><span class="ctx-dot" style="background:#9333ea"></span><span class="ctx-lbl">Activity</span>${activeAct.label}</span>`);
+    if (activeStep) parts.push(`<span class="ctx-step"><span class="ctx-dot" style="background:${activeStep.type === 'prep' ? '#0ea5e9' : '#3b82f6'}"></span><span class="ctx-lbl">${activeStep.type === 'prep' ? 'Prep' : 'Recipe step'}</span>${activeStep.text}</span>`);
+    html = parts.join('');
+    color = activeAct ? '#9333ea' : '#3b82f6';
   }
-  if (label === _lastStepContextText) return;
-  _lastStepContextText = label;
-  stepContext.textContent = label;
+  if (html === _lastStepContextText) return;
+  _lastStepContextText = html;
+  stepContext.innerHTML = html;
   stepContext.style.borderBottomColor = color;
 }
 
@@ -622,6 +973,9 @@ document.getElementById('video-input').addEventListener('change', e => {
   vid.src = URL.createObjectURL(file);
   document.getElementById('video-name').textContent = file.name;
   currentVideoId = extractVideoId(file.name);
+  activitySegments = allActivityData[currentVideoId] || [];
+  updateYoutubeButton();
+  renderVqaList(currentVideoId);
   dropHint.style.display = 'none';
   vid.style.display = 'block';
   applyVideoFilter();
@@ -637,6 +991,9 @@ videoWrap.addEventListener('drop', e => {
     vid.src = URL.createObjectURL(file);
     document.getElementById('video-name').textContent = file.name;
     currentVideoId = extractVideoId(file.name);
+    activitySegments = allActivityData[currentVideoId] || [];
+    updateYoutubeButton();
+    renderVqaList(currentVideoId);
     dropHint.style.display = 'none';
     vid.style.display = 'block';
     applyVideoFilter();
@@ -685,7 +1042,25 @@ function buildTimeline() {
 
   const maxStop = mergedAnnotations.reduce((maxVal, a) => Math.max(maxVal, a.stop || 0), 0);
   const dur = vid.duration || maxStop || 1;
-  timelineSvg.setAttribute('viewBox', `0 0 1000 30`);
+  timelineSvg.setAttribute('viewBox', `0 0 1000 38`);
+
+  // Activity lane (top, thin, purple)
+  activitySegments.forEach(a => {
+    const x = (a.start / dur) * 1000;
+    const end = isNaN(a.end) ? dur : a.end;
+    const w = Math.max(2, ((end - a.start) / dur) * 1000);
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = a.label;
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', 0);
+    rect.setAttribute('width', w); rect.setAttribute('height', 6);
+    rect.setAttribute('fill', '#9333ea'); rect.setAttribute('opacity', '0.7');
+    rect.setAttribute('rx', '1');
+    g.appendChild(title);
+    g.appendChild(rect);
+    timelineSvg.appendChild(g);
+  });
 
   const sortedForTopLane = [
     ...mergedAnnotations.filter(a => a.type === 'step'),
@@ -698,15 +1073,14 @@ function buildTimeline() {
     const x = (a.start / dur) * 1000;
     const w = Math.max(2, ((a.stop - a.start) / dur) * 1000);
     const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
-    const y = (a.type === 'step' || a.type === 'prep') ? 0 : (a.type === 'narration' ? 11 : 22);
-    const h = (a.type === 'step' || a.type === 'prep') ? 8 : 8;
+    const y = (a.type === 'step' || a.type === 'prep') ? 8 : (a.type === 'narration' ? 19 : 29);
     const fill = a.type === 'step' ? '#3b82f6'
       : (a.type === 'prep' ? '#0ea5e9' : (a.type === 'narration' ? '#2a5' : '#f5a623'));
     const opacity = (a.type === 'step' || a.type === 'prep') ? '0.75' : '0.58';
     rect.setAttribute('x', x);
     rect.setAttribute('y', y);
     rect.setAttribute('width', w);
-    rect.setAttribute('height', h);
+    rect.setAttribute('height', 8);
     rect.setAttribute('fill', fill);
     rect.setAttribute('opacity', opacity);
     rect.setAttribute('rx', '1');
@@ -716,6 +1090,7 @@ function buildTimeline() {
 
 vid.addEventListener('loadedmetadata', () => {
   tEnd.textContent = fmtTime(vid.duration);
+  syncBboxCanvas();
   buildTimeline();
 });
 
@@ -726,9 +1101,27 @@ vid.addEventListener('timeupdate', () => {
   progress.style.width = pct + '%';
   tCur.textContent = fmtTime(t);
   renderAudioHud(t);
+  if (!_maskRafId) renderMaskBoxes(t);  // only when rAF loop is not running (paused/seek)
   updateStepContext(t);
+  renderVqaPanel(t);
   highlightActive(t);
 });
+
+// Drive mask rendering at frame rate during playback via rAF
+function _maskRafTick() {
+  renderMaskBoxes(vid.currentTime);
+  _maskRafId = requestAnimationFrame(_maskRafTick);
+}
+function _startMaskRaf() {
+  if (!_maskRafId) _maskRafId = requestAnimationFrame(_maskRafTick);
+}
+function _stopMaskRaf() {
+  if (_maskRafId) { cancelAnimationFrame(_maskRafId); _maskRafId = null; }
+}
+vid.addEventListener('play',   _startMaskRaf);
+vid.addEventListener('pause',  () => { _stopMaskRaf(); renderMaskBoxes(vid.currentTime); });
+vid.addEventListener('ended',  _stopMaskRaf);
+vid.addEventListener('seeked', () => { if (!_maskRafId) renderMaskBoxes(vid.currentTime); });
 
 // Seek on timeline click
 timelineTrack.addEventListener('click', e => {
@@ -786,10 +1179,14 @@ function renderList(annots) {
     el.className = 'annot-item';
     el.dataset.annotIndex = String(i);
 
+    const hw = (a.type === 'narration' && currentVideoId)
+      ? findHowWhy(currentVideoId, a.start, a.stop ?? a.start + 1)
+      : null;
     el.innerHTML = `
       <div class="annot-time">${fmtCaptionMeta(a.start, a.stop)}</div>
       <div class="annot-text">${a.text}</div>
       ${(a.verb || a.noun) ? `<div class="annot-tags">${a.verb ? `<span class="tag-v">${a.verb}</span>` : ''}${a.noun ? `<span class="tag-n">${a.noun}</span>` : ''}</div>` : ''}
+      ${hw ? `<div class="annot-howwhy">${hw.how ? `<span class="tag-how" title="how">↳ ${hw.how.text}</span>` : ''}${hw.why ? `<span class="tag-why" title="why">✦ ${hw.why.text}</span>` : ''}</div>` : ''}
     `;
     el.addEventListener('click', () => {
       if (vid.duration) vid.currentTime = a.start;
@@ -822,7 +1219,7 @@ searchInput.addEventListener('input', () => {
   refreshStatus();
 });
 
-window.addEventListener('resize', updateCaptionSpacers);
+window.addEventListener('resize', () => { updateCaptionSpacers(); syncBboxCanvas(); });
 
 // ---- Auto-load defaults ----
 // These paths are relative to the server root (one level up from viewer/).
@@ -830,6 +1227,11 @@ const AUTO_PATHS = {
   annotations: '../narrations-and-action-segments/unofficial_narrations_converted_from_pkl.csv',
   audio:       '../audio-annotations/HD_EPIC_Sounds.csv',
   recipes:     '../high-level/complete_recipes.json',
+  masks:       '../scene-and-object-movements/mask_info.json',
+  assoc:       '../scene-and-object-movements/assoc_info.json',
+  youtube:     '../youtube-links/HD_EPIC_YouTube_URLs.csv',
+  how:         '../vqa-benchmark/fine_grained_how_recognition.json',
+  why:         '../vqa-benchmark/fine_grained_why_recognition.json',
 };
 
 async function fetchAsFileLike(url, name) {
@@ -884,6 +1286,92 @@ async function autoLoadDefaults() {
     }
   } else {
     console.warn('auto-load recipes failed:', recipesRes.reason);
+  }
+
+  // Load mask and assoc data (used for 2D bbox overlay on video)
+  try {
+    const maskFile = await fetchAsFileLike(AUTO_PATHS.masks, 'mask_info.json');
+    allMaskData = await parseInWorker(await maskFile.arrayBuffer(), 'json');
+  } catch (err) {
+    console.warn('auto-load mask_info failed:', err);
+  }
+  try {
+    const assocFile = await fetchAsFileLike(AUTO_PATHS.assoc, 'assoc_info.json');
+    allAssocData = await parseInWorker(await assocFile.arrayBuffer(), 'json');
+  } catch (err) {
+    console.warn('auto-load assoc_info failed:', err);
+  }
+  if (currentVideoId) buildMaskLookup(currentVideoId);
+
+  try {
+    const res = await fetch(AUTO_PATHS.youtube);
+    if (res.ok) {
+      const text = await res.text();
+      const lines = text.trim().split('\n');
+      for (let i = 1; i < lines.length; i++) {
+        const comma = lines[i].indexOf(',');
+        if (comma < 0) continue;
+        const id = lines[i].slice(0, comma).trim();
+        const url = lines[i].slice(comma + 1).split(',')[0].trim();
+        if (id && url) youtubeUrls[id] = url;
+      }
+    }
+  } catch (err) {
+    console.warn('auto-load youtube URLs failed:', err);
+  }
+
+  try {
+    const participants = ['P01','P02','P03','P04','P05','P06','P07','P08','P09'];
+    const actResponses = await Promise.allSettled(
+      participants.map(p => fetch(`../high-level/activities/${p}_recipe_timestamps.csv`).then(r => r.ok ? r.text() : null))
+    );
+    actResponses.forEach(res => {
+      if (res.status !== 'fulfilled' || !res.value) return;
+      parseCSV(res.value).forEach(r => {
+        const vid2 = r.video_id?.trim();
+        const label = r.high_level_activity_label?.trim();
+        const start = parseFloat(r.start_time);
+        const end   = parseFloat(r.end_time);
+        if (!vid2 || !label) return;
+        (allActivityData[vid2] ||= []).push({ label, start, end });
+      });
+    });
+    if (currentVideoId) {
+      activitySegments = allActivityData[currentVideoId] || [];
+      buildTimeline();
+    }
+  } catch (err) {
+    console.warn('auto-load activity timestamps failed:', err);
+  }
+
+  try {
+    const [howRes, whyRes] = await Promise.all([
+      fetch(AUTO_PATHS.how),
+      fetch(AUTO_PATHS.why),
+    ]);
+    if (howRes.ok && whyRes.ok) {
+      buildHowWhyLookup(await howRes.json(), await whyRes.json());
+    }
+  } catch (err) {
+    console.warn('auto-load how/why failed:', err);
+  }
+
+  try {
+    const vqaFiles = [
+      ['gaze_gaze_estimation',          '../vqa-benchmark/gaze_gaze_estimation.json'],
+      ['gaze_interaction_anticipation',  '../vqa-benchmark/gaze_interaction_anticipation.json'],
+      ['ingredient_ingredient_weight',   '../vqa-benchmark/ingredient_ingredient_weight.json'],
+      ['nutrition_nutrition_change',     '../vqa-benchmark/nutrition_nutrition_change.json'],
+    ];
+    await Promise.allSettled(vqaFiles.map(async ([cat, path]) => {
+      const res = await fetch(path);
+      if (!res.ok) return;
+      const data = await parseInWorker(await res.arrayBuffer(), 'json');
+      buildVqaLookup(data, cat);
+    }));
+    if (currentVideoId) renderVqaList(currentVideoId);
+  } catch (err) {
+    console.warn('auto-load VQA failed:', err);
   }
 
   setStatus('data ready — drop a video to begin');
