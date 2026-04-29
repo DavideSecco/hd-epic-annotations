@@ -181,7 +181,7 @@ L'HTML generato da `view_slam_3d.py` è già strutturato per l'embedding:
 | 3 | **YouTube link** auto (bottone "Open on YouTube") | Minimo | `youtube-links/HD_EPIC_YouTube_URLs.csv` | ✅ **FATTO** |
 | 4 | **Object movements** in timeline + lista | Medio | `scene-and-object-movements/assoc_info.json` | ✅ |
 | 5 | **"How/Why" clauses** su ogni narration | Medio | `fine_grained_how/why_recognition.json` | ✅ **FATTO** |
-| 6 | **Nutritional live tracker** (calorie nel tempo) | Medio | `complete_recipes.json` | ✅ |
+| 6 | **Nutritional live tracker** (calorie nel tempo) | Medio | `complete_recipes.json` | ✅ **FATTO** |
 | 7 | **VQA panel** — domande al timestamp corrente | Medio | tutti i VQA JSON | ✅ **FATTO** |
 | 8 | **Digital Twin 3D** integrato nel viewer HTML | Alto | `.glb` da esportare da HPC, salvare in locale | ✅ |
 | 9 | **Gaze points 3D** sovrapposti alla cucina | Alto | `priming_info.json` | ✅ |
@@ -240,7 +240,18 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 
 ---
 
-## 7. Stato lavori al 28 aprile 2026
+## 7. Stato lavori al 29 aprile 2026
+
+### Fatto (29 aprile)
+- **Nutritional live tracker** (#6): pannello `#nutrition-panel` tra recipe e VQA. Funzioni: `extractNutritionTimeline()`, `renderNutritionPanel()`, `renderNutritionTracker(t)`. Globals: `nutritionTimeline`, `nutritionRecipeTotals`, `_lastNutritionAdded`.
+  - Mostra: barra calorie arancione (corrente / totale ricetta), 3 mini-barre macro (Protein/Carbs/Fat), lista ingredienti con ✓ tick al momento dell'aggiunta
+  - Timestamp: usa `add.start` come primario, `weigh.start` come fallback se `add` è vuoto → copertura ~90/142 video
+  - Gestisce `cal=N/A`: messaggio "No calorie data for this recipe" invece di barre vuote
+  - Gestisce assenza timestamp: messaggio "No timestamps for this recording — showing recipe totals only"
+  - Colonne nella lista: Ingredient · Calories · Added at (con header row `.nut-ing-header`)
+  - Collassabile con localStorage come le altre sezioni
+  - **Copertura dati**: 85 video hanno sia calorie sia timestamp `add`; 5 aggiuntivi hanno solo `weigh`; 28 video non hanno né calorie né timestamp (es. P01-20240204-152537 — Vermicelli Rice)
+  - **Video ideale per testare**: `P01-20240202-161354.mp4` (Cacio e Pepe) → pasta 445 kcal appare a ~313s
 
 ### Fatto (28 aprile)
 - **YouTube link**: bottone `<a id="yt-btn">` nella topbar, hidden di default, appare appena il video_id è nel CSV. Caricamento in `autoLoadDefaults`. Path: `viewer/index.html` + `viewer/viewer.js` (`youtubeUrls`, `updateYoutubeButton()`).
@@ -280,6 +291,7 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 - **YouTube link**: bottone "▶ YouTube" nella topbar, visibile solo se il video_id ha un URL nel CSV. Si popola automaticamente all'avvio, appare appena si carica il video.
 - **How/Why clauses**: pills arancioni (↳ how) e viola (✦ why) sotto ogni narration che ha un'entry nei JSON VQA `fine_grained_how/why_recognition.json`. Match per video_id + overlap temporale (±1s). Copertura sparsa (~500 entry how + 500 why su 156 video).
 - **Activity segments**: tutti i 9 CSV `high-level/activities/P0X_recipe_timestamps.csv` caricati in parallelo all'avvio → `allActivityData`. Corsia viola in cima alla timeline (sopra step/narration/audio). Label corrente mostrata in `step-context` come "Attività · Fase". Gestisce `end_time = "end"` come ∞. Implementazione: `getActivityAt()`, `allActivityData`, `activitySegments`.
+- **Nutritional live tracker**: pannello `#nutrition-panel` (tra recipe e VQA). Barra calorie + 3 mini-barre macro (Protein/Carbs/Fat) + lista ingredienti con ✓ tick. Timestamp `add` primario, `weigh` fallback. Gestisce ricette senza calorie e senza timestamp con messaggi informativi.
 
 ### Note tecniche bbox overlay
 - FPS assunto 30 (Aria glasses), finestra ±15 frame
@@ -346,10 +358,9 @@ Esempio reale (P01-20240202-110250, "juicer bowl"):
 ### Cosa NON c'è ancora
 - **Hand mask on-the-fly** — attualmente richiede pre-estrazione offline (`extract_hand_masks.py`); bloccato da permessi di scrittura su HPC (vedi TODO in §7)
 - **Hands badge** su ogni narration — poco informativo
-- **Ingredienti con timestamp** (add/weigh)
-- **Nutritional live tracker** — calorie accumulate nel tempo
-- **Object movements in timeline** — `assoc_info.json` ha segmenti temporali
-- **VQA panel** — domande attive al timestamp corrente
+- **Object movements in timeline** — `assoc_info.json` ha segmenti temporali; 34 oggetti per video, ogni oggetto con 1+ track `[start, end]`
+- **Nutritional live tracker** — ✅ **FATTO** (29 aprile, vedi §7)
+- **Frecce movimento oggetti nel viewer SLAM 3D** — da fare in `view_slam_3d.py`: `ArrowHelper` tra `3d_location` prima/ultima mask di ogni track per ogni oggetto in `assoc_info.json`; label `"{name}: {fixture_start} → {fixture_end}"`; filtrabile per intervallo temporale. Dati già disponibili in locale. Da fare in futuro.
 - **Integrazione viewer SLAM** nel viewer HTML come pannello
 - **Eye gaze per-frame** nel viewer SLAM (da `general_eye_gaze.csv`, richiede allineamento temporale)
 
