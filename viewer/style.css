@@ -195,6 +195,51 @@
   .tag-how { display: inline-block; background: #2a1f10; color: #fb923c; border-radius: 4px; padding: 0.15em 0.5em; font-size: 10px; line-height: 1.3; max-width: 100%; }
   .tag-why { display: inline-block; background: #1e1a2e; color: #c084fc; border-radius: 4px; padding: 0.15em 0.5em; font-size: 10px; line-height: 1.3; max-width: 100%; }
 
+  /* --- Nutrition Panel --- */
+  #nutrition-panel { display: none; flex: 0 0 auto; max-height: 280px; overflow-y: auto; border-top: 1px solid #2a2a2a; background: #0d0d0d; }
+  #nutrition-panel.has-nutrition { display: block; }
+  #nutrition-panel.sec-collapsed { max-height: none; overflow: hidden; }
+  #nutrition-panel.sec-collapsed .sec-body { display: none; }
+  .nut-header { padding: 6px 14px; font-size: 11px; font-weight: 600; color: #666; background: #111; border-bottom: 1px solid #1e1e1e; position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; }
+  .nut-cal-row { display: flex; align-items: center; gap: 6px; padding: 8px 14px 4px; }
+  .nut-flame { font-size: 14px; flex-shrink: 0; }
+  .nut-cal-num { font-size: 18px; font-weight: 700; color: #fb923c; font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 36px; }
+  .nut-cal-unit { font-size: 10px; color: #666; flex-shrink: 0; margin-right: 2px; }
+  .nut-cal-bar-wrap { flex: 1; height: 6px; background: #222; border-radius: 3px; overflow: hidden; }
+  .nut-cal-bar { height: 100%; background: linear-gradient(90deg, #ea580c, #fb923c); border-radius: 3px; transition: width 0.35s ease; }
+  .nut-cal-total { font-size: 10px; color: #555; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .nut-macros { display: flex; gap: 10px; padding: 4px 14px 8px; border-bottom: 1px solid #1a1a1a; }
+  .nut-macro { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .nut-m-lbl { font-size: 9px; font-weight: 600; letter-spacing: 0.02em; }
+  .nut-m-lbl-p { color: #60a5fa; }
+  .nut-m-lbl-c { color: #fbbf24; }
+  .nut-m-lbl-f { color: #f87171; }
+  .nut-m-bar-wrap { height: 4px; background: #222; border-radius: 2px; overflow: hidden; }
+  .nut-m-bar { height: 100%; border-radius: 2px; transition: width 0.35s ease; }
+  .nut-m-prot { background: #3b82f6; }
+  .nut-m-carb { background: #d97706; }
+  .nut-m-fat  { background: #ef4444; }
+  .nut-m-val { font-size: 9px; color: #555; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nut-no-ts { font-size: 10px; color: #555; font-style: italic; padding: 4px 14px 6px; }
+  .nut-no-data { font-size: 11px; color: #555; padding: 8px 14px; font-style: italic; }
+  .nut-ing-header { display: flex; align-items: center; gap: 6px; padding: 4px 14px 3px; border-bottom: 1px solid #222; }
+  .nut-ing-header span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #555; }
+  .nut-ing-header .nut-ing-check { flex-shrink: 0; width: 10px; }
+  .nut-ing-header .nut-ing-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nut-ing-header .nut-ing-cal { flex-shrink: 0; min-width: 56px; }
+  .nut-ing-header .nut-ing-time { flex-shrink: 0; min-width: 30px; text-align: right; }
+  .nut-ing-list { padding: 2px 0; }
+  .nut-ing { display: flex; align-items: baseline; gap: 6px; padding: 4px 14px; font-size: 11px; color: #555; border-bottom: 1px solid #151515; }
+  .nut-ing:last-child { border-bottom: none; }
+  .nut-ing.nut-added { color: #999; }
+  .nut-ing-check { font-size: 10px; flex-shrink: 0; color: #444; width: 10px; }
+  .nut-ing.nut-added .nut-ing-check { color: #4ade80; }
+  .nut-ing-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nut-ing.nut-added .nut-ing-name { color: #ccc; }
+  .nut-ing-cal { font-size: 10px; color: #555; flex-shrink: 0; font-variant-numeric: tabular-nums; min-width: 56px; }
+  .nut-ing.nut-added .nut-ing-cal { color: #fb923c; }
+  .nut-ing-time { font-size: 9px; color: #4ade80; flex-shrink: 0; font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+
   /* --- VQA Panel --- */
   #vqa-panel { display: none; flex: 0 0 auto; max-height: 320px; overflow-y: auto; border-top: 1px solid #2a2a2a; background: #0d0d0d; }
   #vqa-panel.has-questions { display: block; }

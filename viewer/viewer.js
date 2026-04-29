@@ -51,6 +51,9 @@ let activitySegments = [];
 let vqaLookup = {};
 let rawRecipesJson = null;
 let currentRecipeMeta = null;
+let nutritionTimeline = [];
+let nutritionRecipeTotals = null;
+let _lastNutritionAdded = -1;
 
 let pyodide = null;
 let pyodideInitPromise = null;
@@ -238,6 +241,8 @@ function applySectionState(name) {
     document.getElementById('recipe-overview').classList.toggle('sec-collapsed', collapsed);
   } else if (name === 'vqa') {
     document.getElementById('vqa-panel').classList.toggle('sec-collapsed', collapsed);
+  } else if (name === 'nutrition') {
+    document.getElementById('nutrition-panel').classList.toggle('sec-collapsed', collapsed);
   }
   document.querySelectorAll(`.sec-toggle[data-sec="${name}"]`).forEach(btn => {
     btn.textContent = collapsed ? '▸' : '▾';
@@ -256,7 +261,7 @@ document.querySelector('.sec-toggle[data-sec="narrations"]')
   .addEventListener('click', () => toggleSection('narrations'));
 
 // Apply saved states on load
-['narrations', 'recipe', 'vqa'].forEach(applySectionState);
+['narrations', 'recipe', 'nutrition', 'vqa'].forEach(applySectionState);
 
 function refreshStatus() {
   if (!allAnnotations.length && !allAudioAnnotations.length && !rawRecipesJson) {
@@ -552,8 +557,11 @@ function applyVideoFilter() {
     mergedAnnotations = [];
     filteredAnnotations = [];
     activeIdx = -1;
+    nutritionTimeline = [];
+    nutritionRecipeTotals = null;
     renderList(filteredAnnotations);
     renderRecipeOverview(null);
+    renderNutritionPanel();
     renderAudioHud(0);
     updateStepContext(0);
     buildTimeline();
@@ -573,9 +581,12 @@ function applyVideoFilter() {
 
   if (rawRecipesJson) {
     extractStepsForVideo(currentVideoId);
+    extractNutritionTimeline(currentVideoId);
   } else {
     stepAnnotations = [];
     currentRecipeMeta = null;
+    nutritionTimeline = [];
+    nutritionRecipeTotals = null;
   }
 
   mergedAnnotations = [
@@ -595,6 +606,7 @@ function applyVideoFilter() {
   loadHandMasks(currentVideoId);  // async, non-blocking
   renderList(filteredAnnotations);
   renderRecipeOverview(currentRecipeMeta);
+  renderNutritionPanel();
   renderAudioHud(vid.currentTime || 0);
   renderMaskBoxes(vid.currentTime || 0);
   updateStepContext(vid.currentTime || 0);
@@ -887,6 +899,169 @@ function renderRecipeOverview(meta) {
   recipeOverview.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('recipe'));
 }
 
+// ---- Nutritional tracker ----
+const nutritionPanel = document.getElementById('nutrition-panel');
+
+function extractNutritionTimeline(videoId) {
+  nutritionTimeline = [];
+  nutritionRecipeTotals = null;
+  if (!rawRecipesJson || !videoId) return;
+
+  let totCal = 0, totCarbs = 0, totFat = 0, totProt = 0, hasAny = false;
+
+  Object.values(rawRecipesJson).forEach(recipe => {
+    (recipe.captures || []).forEach(cap => {
+      if (!(cap.videos || []).includes(videoId)) return;
+      Object.values(cap.ingredients || {}).forEach(ing => {
+        const name = String(ing.name || '').trim();
+        const amount = (ing.amount != null && ing.amount !== 'N/A') ? ing.amount : null;
+        const unit = String(ing.amount_unit || '').trim();
+        const cal = parseFloat(ing.calories);
+        const carbs = parseFloat(ing.carbs);
+        const fat = parseFloat(ing.fat);
+        const protein = parseFloat(ing.protein);
+        const hasNut = !isNaN(cal);
+
+        // Use add.start as primary timestamp; fall back to weigh.start if add is missing
+        const addEvts   = (ing.add   || []).filter(e => e.video === videoId);
+        const weighEvts = (ing.weigh || []).filter(e => e.video === videoId);
+        let addTime = null;
+        if (addEvts.length)   addTime = parseFloat(addEvts[0].start);
+        else if (weighEvts.length) addTime = parseFloat(weighEvts[0].start);
+
+        nutritionTimeline.push({ name, amount, unit,
+          cal: hasNut ? cal : null, carbs: hasNut ? carbs : null,
+          fat: hasNut ? fat : null, protein: hasNut ? protein : null,
+          addTime,
+          fromWeigh: !addEvts.length && !!weighEvts.length });
+
+        if (hasNut) {
+          totCal += cal; totCarbs += carbs; totFat += fat; totProt += protein;
+          hasAny = true;
+        }
+      });
+    });
+  });
+
+  nutritionTimeline.sort((a, b) => {
+    if (a.addTime === null && b.addTime === null) return 0;
+    if (a.addTime === null) return 1;
+    if (b.addTime === null) return -1;
+    return a.addTime - b.addTime;
+  });
+
+  if (hasAny) nutritionRecipeTotals = { cal: totCal, carbs: totCarbs, fat: totFat, protein: totProt };
+}
+
+function renderNutritionPanel() {
+  _lastNutritionAdded = -1;
+  if (!nutritionTimeline.length) {
+    nutritionPanel.innerHTML = '';
+    nutritionPanel.classList.remove('has-nutrition');
+    return;
+  }
+
+  const tot = nutritionRecipeTotals;
+  const collapsed = !!_secState['nutrition'];
+  const totCalStr = tot ? Math.round(tot.cal) + ' kcal' : 'N/A';
+  const hasTimestamps = nutritionTimeline.some(i => i.addTime !== null);
+
+  const ingsHtml = nutritionTimeline.map((ing, i) => {
+    const calStr = ing.cal !== null ? Math.round(ing.cal) + ' kcal' : 'N/A';
+    const amtStr = ing.amount !== null ? ` ${ing.amount}${ing.unit ? ' ' + ing.unit : ''}` : '';
+    return `<div class="nut-ing" data-idx="${i}">` +
+      `<span class="nut-ing-check">○</span>` +
+      `<span class="nut-ing-name">${ing.name}${amtStr}</span>` +
+      `<span class="nut-ing-cal">${calStr}</span>` +
+      `<span class="nut-ing-time"></span>` +
+      `</div>`;
+  }).join('');
+
+  const pStr = tot ? Math.round(tot.protein) : 'N/A';
+  const cStr = tot ? Math.round(tot.carbs)   : 'N/A';
+  const fStr = tot ? Math.round(tot.fat)     : 'N/A';
+
+  const trackerHtml = tot
+    ? `<div class="nut-cal-row">` +
+        `<span class="nut-flame">🔥</span>` +
+        `<span class="nut-cal-num" id="nut-cal-cur">0</span>` +
+        `<span class="nut-cal-unit">kcal</span>` +
+        `<div class="nut-cal-bar-wrap"><div class="nut-cal-bar" id="nut-cal-bar" style="width:0%"></div></div>` +
+        `<span class="nut-cal-total">/ ${Math.round(tot.cal)}</span>` +
+      `</div>` +
+      `<div class="nut-macros">` +
+        `<div class="nut-macro"><span class="nut-m-lbl nut-m-lbl-p">Protein</span>` +
+          `<div class="nut-m-bar-wrap"><div class="nut-m-bar nut-m-prot" id="nut-m-prot" style="width:0%"></div></div>` +
+          `<span class="nut-m-val" id="nut-m-prot-val">0 / ${pStr}g</span></div>` +
+        `<div class="nut-macro"><span class="nut-m-lbl nut-m-lbl-c">Carbs</span>` +
+          `<div class="nut-m-bar-wrap"><div class="nut-m-bar nut-m-carb" id="nut-m-carb" style="width:0%"></div></div>` +
+          `<span class="nut-m-val" id="nut-m-carb-val">0 / ${cStr}g</span></div>` +
+        `<div class="nut-macro"><span class="nut-m-lbl nut-m-lbl-f">Fat</span>` +
+          `<div class="nut-m-bar-wrap"><div class="nut-m-bar nut-m-fat" id="nut-m-fat" style="width:0%"></div></div>` +
+          `<span class="nut-m-val" id="nut-m-fat-val">0 / ${fStr}g</span></div>` +
+      `</div>` +
+      (!hasTimestamps ? `<div class="nut-no-ts">No timestamps for this recording — showing recipe totals only</div>` : '')
+    : `<div class="nut-no-data">No calorie data for this recipe</div>`;
+
+  nutritionPanel.innerHTML =
+    `<div class="nut-header">Nutrition · ${totCalStr} total ` +
+      `<button class="sec-toggle" data-sec="nutrition">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-body">` +
+      trackerHtml +
+      `<div class="nut-ing-header">` +
+        `<span class="nut-ing-check"></span>` +
+        `<span class="nut-ing-name">Ingredient</span>` +
+        `<span class="nut-ing-cal">Calories</span>` +
+        `<span class="nut-ing-time">${hasTimestamps ? 'Added at' : ''}</span>` +
+      `</div>` +
+      `<div class="nut-ing-list" id="nut-ing-list">${ingsHtml}</div>` +
+    `</div>`;
+  nutritionPanel.classList.add('has-nutrition');
+  nutritionPanel.classList.toggle('sec-collapsed', collapsed);
+  nutritionPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('nutrition'));
+}
+
+function renderNutritionTracker(t) {
+  if (!nutritionTimeline.length || _secState['nutrition']) return;
+
+  let addedCount = 0, sumCal = 0, sumCarbs = 0, sumFat = 0, sumProt = 0;
+  for (const ing of nutritionTimeline) {
+    if (ing.addTime !== null && ing.addTime <= t) {
+      addedCount++;
+      if (ing.cal !== null) { sumCal += ing.cal; sumCarbs += ing.carbs; sumFat += ing.fat; sumProt += ing.protein; }
+    }
+  }
+  if (addedCount === _lastNutritionAdded) return;
+  _lastNutritionAdded = addedCount;
+
+  const tot = nutritionRecipeTotals;
+
+  const calBar = document.getElementById('nut-cal-bar');
+  const calCur = document.getElementById('nut-cal-cur');
+  if (calBar) calBar.style.width = (tot && tot.cal > 0 ? Math.min(100, (sumCal / tot.cal) * 100) : 0) + '%';
+  if (calCur) calCur.textContent = Math.round(sumCal);
+
+  if (tot) {
+    const pb = document.getElementById('nut-m-prot'); if (pb) pb.style.width = Math.min(100, (sumProt / (tot.protein || 1)) * 100) + '%';
+    const cb = document.getElementById('nut-m-carb'); if (cb) cb.style.width = Math.min(100, (sumCarbs / (tot.carbs  || 1)) * 100) + '%';
+    const fb = document.getElementById('nut-m-fat');  if (fb) fb.style.width = Math.min(100, (sumFat   / (tot.fat    || 1)) * 100) + '%';
+    const pv = document.getElementById('nut-m-prot-val'); if (pv) pv.textContent = `${Math.round(sumProt)} / ${Math.round(tot.protein)}g`;
+    const cv = document.getElementById('nut-m-carb-val'); if (cv) cv.textContent = `${Math.round(sumCarbs)} / ${Math.round(tot.carbs)}g`;
+    const fv = document.getElementById('nut-m-fat-val');  if (fv) fv.textContent = `${Math.round(sumFat)} / ${Math.round(tot.fat)}g`;
+  }
+
+  const ingList = document.getElementById('nut-ing-list');
+  if (!ingList) return;
+  ingList.querySelectorAll('.nut-ing').forEach((row, i) => {
+    const ing = nutritionTimeline[i];
+    const added = ing.addTime !== null && ing.addTime <= t;
+    row.classList.toggle('nut-added', added);
+    row.querySelector('.nut-ing-check').textContent = added ? '✓' : '○';
+    const timeEl = row.querySelector('.nut-ing-time');
+    if (timeEl) timeEl.textContent = added ? fmtTime(ing.addTime) : '';
+  });
+}
+
 function getActiveStepAt(currentTime) {
   if (!stepAnnotations.length) return null;
   let activeStep = null;
@@ -1103,6 +1278,7 @@ vid.addEventListener('timeupdate', () => {
   renderAudioHud(t);
   if (!_maskRafId) renderMaskBoxes(t);  // only when rAF loop is not running (paused/seek)
   updateStepContext(t);
+  renderNutritionTracker(t);
   renderVqaPanel(t);
   highlightActive(t);
 });
@@ -1380,4 +1556,5 @@ async function autoLoadDefaults() {
 // hide video initially
 vid.style.display = 'none';
 renderRecipeOverview(null);
+renderNutritionPanel();
 autoLoadDefaults();
