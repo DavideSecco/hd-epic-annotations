@@ -13,7 +13,12 @@
   /* --- Main layout --- */
   #main { display: flex; flex: 1; overflow: hidden; }
 
-  /* --- Video area --- */
+  /* --- Video area ---
+     Note: tentativi di hint compositor (will-change, translateZ, contain: paint)
+     erano stati aggiunti per provare a fixare lo stutter su Firefox, ma non hanno
+     prodotto effetti misurabili e sono stati rimossi. Vedi §"Firefox stutter
+     known issue" in CLAUDE.md per la storia degli esperimenti. Su Chromium
+     funziona out-of-the-box, è il browser raccomandato. */
   #video-panel { flex: 0 0 50%; display: flex; flex-direction: column; background: #090909; min-width: 0; min-height: 0; }
   #video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #090909; position: relative; padding: 0; overflow: hidden; min-height: 0; }
   video { width: 100%; height: auto; max-width: 100%; max-height: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block; }

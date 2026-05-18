@@ -255,6 +255,26 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 
 - **Fix allineamento temporale video ↔ SLAM** (caveat risolto): `Videos/PXX/{video_id}_mp4_to_vrs_time_ns.csv` letto da `load_video_t0_vrs_us()` in `view_slam_3d.py`. Il `vrs_device_time_ns` della prima riga (= video frame 0 nel clock VRS) viene serializzato nel JSON come `video_t0_vrs_us`. `slam-viewer.js` ora calcola `setTime(tVideoS) → VIDEO_T0_US + tVideoS*1e6` invece di `T0 + tVideoS*1e6`. Per P01-20240202-110250 il drift era +1.500s. Fallback automatico al comportamento legacy se il campo manca nel JSON.
 
+- **Ottimizzazioni overlay rendering** in `viewer.js`:
+  - **`requestVideoFrameCallback`** sostituisce `requestAnimationFrame` per il loop bbox/hand-mask: firing ora 30 Hz allineato al decoder video invece di 60 Hz del display refresh (zero invocazioni redundant). Fallback a rAF per browser legacy.
+  - **Frame-skip cache su `renderMaskBoxes`**: `_lastBoxFrame` evita di rifare `clearRect` + `drawImage` + scan `masksByFrame` quando il frame video non è cambiato. Invalidato su resize via `syncBboxCanvas`.
+  - **Skip `drawImage` quando hand-mask vuoto**: `_handBufHasContent` evita la blit di 1408×1408 ImageData quando nessuna mano è presente nel frame.
+
+### Firefox stutter — known issue (non risolto, usare Chromium)
+
+Sul viewer principale Firefox 150 (Linux) **mostra micro-stutter video durante il playback**, anche con video Aria H.264 che girano perfettamente fluidi in Firefox da soli (drag&drop del solo MP4 in una tab vuota → fluido; stesso file caricato nel viewer → stuttering visibile). Su Chromium tutto fluido out-of-the-box. Sessione di debug del 18 maggio:
+
+- **Profile Firefox Profiler**: main thread tranquillo (CPU ~5%, picchi modesti), Compositor track con blocchi blu regolari, Renderer attivo. Niente jank evidente nelle metriche.
+- **3D toggle off**: stuttering invariato → SLAM rAF non è il colpevole.
+- **Overlay nascosti via console** (`#bbox-canvas` + `#audio-hud` `display:none`): stuttering invariato → compositing degli overlay non è la causa.
+- **3D toggle off + overlay nascosti** insieme: stuttering invariato → né overlay né SLAM.
+- **CSS compositor hints rimossi via console** (`will-change`, `transform: translateZ(0)`, `contain: paint`): nessun cambiamento → quegli hint non aiutavano (rimossi dal codice).
+- **rAF → `requestVideoFrameCallback` switch**: nessun cambiamento visibile, ma è un miglioramento oggettivo del codice → tenuto.
+
+Ipotesi residue non testate: decoder Firefox (VA-API su Linux non sempre stabile per H.264), interazione con altre tab pesanti aperte in parallelo (Google Docs, Office365 visti nello stesso profile), oppure compositing video con sibling assoluti che Firefox tratta in pipeline meno efficiente di Chromium indipendentemente da `will-change`.
+
+**Decisione**: il viewer è marcato Chromium-only nella practice. Firefox resta supportato a livello funzionale (tutto funziona, anche se con stuttering durante playback). Non ulteriori indagini per ora.
+
 ### Fatto (30 aprile)
 - **Object trajectories animate nel viewer SLAM 3D** (`view_slam_3d.py`): ogni oggetto in `assoc_info.json` è una sfera verde che si muove seguendo le sue mask in `mask_info.json`.
   - Funzione Python `load_object_trajectories()` (sostituisce `load_object_masks()`): produce `[{name, keyframes: [[t, x, y, z, t_seg_s, t_seg_e], ...]}, ...]`. `t = frame_number / 30` (FPS Aria).
