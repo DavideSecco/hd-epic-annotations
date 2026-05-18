@@ -38,6 +38,11 @@ from pathlib import Path
 HPC_ROOT = Path("/mnt/bocconi_hpc_video_datasets/HD-EPIC")
 REPO_ROOT = Path(__file__).parent
 
+# Shared three.js scene module: same file used by viewer/slam-test.html and (in
+# Fase 3) by the main viewer. Inlined into the standalone HTML so file:// works.
+SLAM_VIEWER_JS_PATH  = REPO_ROOT / 'viewer' / 'slam-viewer.js'
+SLAM_VIEWER_CSS_PATH = REPO_ROOT / 'viewer' / 'slam-viewer.css'
+
 BLENDER_EXPORT_SCRIPT = """\
 import bpy, sys
 output_path = sys.argv[sys.argv.index("--") + 1]
@@ -124,18 +129,11 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
 /* legend dots */
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
 
-/* object labels (CSS2DRenderer) */
-.obj-label {
-  color: #aaffcc;
-  font-size: 10px;
-  font-family: monospace;
-  background: rgba(0,0,0,.55);
-  padding: 1px 5px;
-  border-radius: 3px;
-  pointer-events: none;
-  white-space: nowrap;
-  user-select: none;
-}
+/* layer-panel sub-toggle (indented) */
+.sub-toggle { margin-left: 22px; opacity: .8; font-size: 12px; }
+
+/* ── Injected from viewer/slam-viewer.css at generation time ── */
+___SLAM_VIEWER_CSS___
 </style>
 </head>
 <body>
@@ -165,6 +163,9 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
     <div>
       <span class="dot" style="background:#44ff88"></span><span class="stat">mask objects</span>
     </div>
+    <div>
+      <span style="display:inline-block;width:14px;height:2px;background:#ff8844;margin-right:5px;vertical-align:middle"></span><span class="stat">object movement</span>
+    </div>
   </div>
 
   <div id="layer-panel">
@@ -174,6 +175,8 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
     <label class="layer-toggle"><input type="checkbox" id="tog-gaze"    checked> Gaze priming</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-head"    checked> Camera head</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-objects" checked> Objects</label>
+    <label class="layer-toggle"><input type="checkbox" id="tog-movements" checked> Movements</label>
+    <label class="layer-toggle sub-toggle"><input type="checkbox" id="tog-mov-persist"> all at once</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-grid"    checked> Grid</label>
   </div>
 
@@ -203,381 +206,73 @@ body { background: #0f0f1e; color: #e0e0f0; font-family: monospace; overflow: hi
 </script>
 
 <script type="module">
-import * as THREE from 'three';
-import { OrbitControls }                    from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader }                       from 'three/addons/loaders/GLTFLoader.js';
-import { CSS2DRenderer, CSS2DObject }       from 'three/addons/renderers/CSS2DRenderer.js';
+// ════════════════════════════════════════════════════════════════════════════════
+// Inlined module source (viewer/slam-viewer.js) — single source of truth.
+// `view_slam_3d.py` injects the file contents at generation time. The standalone
+// HTML therefore stays self-contained (file:// works) while sharing the exact
+// same scene logic used by the integrated viewer.
+// ════════════════════════════════════════════════════════════════════════════════
+___SLAM_VIEWER_JS___
 
 // ════════════════════════════════════════════════════════════════════════════════
-// DATA
-// In the integrated viewer, receive this from outside instead of parsing here.
+// Bootstrap (standalone-only UI: info panel, timeline, play/pause, speed,
+// reset-cam, layer toggles, spacebar). The module owns the render loop, the
+// resize observer and all three.js state — this bootstrap only drives time
+// and wires DOM controls to its API.
 // ════════════════════════════════════════════════════════════════════════════════
-const DATA    = JSON.parse(document.getElementById('slam-data').textContent);
-const traj    = DATA.trajectory;   // { t[], x[], y[], z[], qx[], qy[], qz[], qw[] }
-const gaze    = DATA.gaze || null; // { obj_x[], obj_y[], obj_z[], gaze_x[], gaze_y[], gaze_z[] }
-const objects = DATA.objects || []; // [{ x, y, z, label, fixture }, ...]
-const N     = traj.t.length;
-const T0    = traj.t[0];
-const T1    = traj.t[N - 1];
-const DUR_US = T1 - T0;
-const DUR_S  = DUR_US / 1e6;
+const DATA      = JSON.parse(document.getElementById('slam-data').textContent);
+const container = document.getElementById('slam-viewer');
+const loadingEl = document.getElementById('loading');
 
-// ════════════════════════════════════════════════════════════════════════════════
-// COORDINATE TRANSFORM
-//
-// SLAM world space = Blender convention: Z up, Y forward, X right.
-// Three.js (and GLB exported by Blender): Y up, -Z forward, X right.
-// Blender's GLTF exporter auto-converts the mesh, so the kitchen GLB is
-// already in Y-up space. We apply the same transform to SLAM point data:
-//
-//   three.x =  slam.x
-//   three.y =  slam.z   (Blender Z → Three.js Y)
-//   three.z = -slam.y   (Blender Y → Three.js -Z)
-//
-// Verification: SLAM gravity = (0, 0, -9.81) → (0, -9.81, 0) in Three.js,
-// which correctly points in -Y (downward). ✓
-// ════════════════════════════════════════════════════════════════════════════════
-function s2t(x, y, z) { return new THREE.Vector3(x, z, -y); }
+const slam = await initSlamViewer({
+  container,
+  data:   DATA,
+  glbUrl: '___GLB_PATH___',
+});
 
-// ════════════════════════════════════════════════════════════════════════════════
-// QUATERNION TRANSFORM: SLAM → Three.js
-//
-// Same coordinate change as s2t, applied to orientation quaternions.
-// Q_ALIGN = rotation by -90° around X (the matrix that converts SLAM Z-up to
-// Three.js Y-up): q_three = Q_ALIGN * q_slam * Q_ALIGN^{-1}
-//
-// After applying slamQuatToThree to headGroup.quaternion, the headGroup's local
-// axes in Three.js world correspond to Aria device axes:
-//   local +X  = device right
-//   local +Y  = device forward (camera optical axis = +Z in Aria device frame)
-//   local +Z  = device up (toward top of glasses)
-//
-// Consequence: ConeGeometry (tip at +Y by default) = gaze direction. No rotation needed.
-//
-// Verification: gravity in SLAM = (0,0,-9.81). Transformed: s2t(0,0,-9.81) = (0,-9.81,0).
-// With Q_ALIGN on a quaternion aligned with gravity-down: local +Y → Three.js -Y. ✓
-// ════════════════════════════════════════════════════════════════════════════════
-const _QA  = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2); // −90° around X
-const _QAI = new THREE.Quaternion( Math.SQRT1_2, 0, 0, Math.SQRT1_2); // +90° around X
-
-function slamQuatToThree(qx, qy, qz, qw) {
-  return _QA.clone()
-    .multiply(new THREE.Quaternion(qx, qy, qz, qw))
-    .multiply(_QAI);
+// Hide loading overlay; warn if kitchen GLB never made it in.
+const info = slam.getInfo();
+if (!info.kitchenLoaded) {
+  loadingEl.textContent = '⚠ Kitchen model not found — showing trajectory only';
+  loadingEl.style.color = '#fa8';
+  setTimeout(() => { loadingEl.style.display = 'none'; }, 4000);
+} else {
+  loadingEl.style.display = 'none';
 }
 
-// ════════════════════════════════════════════════════════════════════════════════
-// RENDERER + SCENE
-// ════════════════════════════════════════════════════════════════════════════════
-const container  = document.getElementById('slam-viewer');
-const loadingEl  = document.getElementById('loading');
-
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
-container.appendChild(renderer.domElement);
-
-const labelRenderer = new CSS2DRenderer();
-labelRenderer.setSize(window.innerWidth, window.innerHeight);
-labelRenderer.domElement.style.position = 'absolute';
-labelRenderer.domElement.style.top = '0';
-labelRenderer.domElement.style.pointerEvents = 'none';
-container.appendChild(labelRenderer.domElement);
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0d0d1c);
-scene.fog = new THREE.FogExp2(0x0d0d1c, 0.01);
-
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.01, 300);
-camera.position.set(2, 4, 8);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.minDistance = 0.3;
-controls.maxDistance = 120;
-
-// Lights
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-const sun = new THREE.DirectionalLight(0xfff5e0, 1.3);
-sun.position.set(4, 8, 4); sun.castShadow = true;
-scene.add(sun);
-const fill = new THREE.DirectionalLight(0xc8d8ff, 0.3);
-fill.position.set(-5, 3, -5);
-scene.add(fill);
-
-const grid = new THREE.GridHelper(40, 80, 0x1a1a44, 0x13132e);
-scene.add(grid);
-
-// ════════════════════════════════════════════════════════════════════════════════
-// TRAJECTORY LINE (gradient blue → red over time)
-// ════════════════════════════════════════════════════════════════════════════════
-const positions = new Float32Array(N * 3);
-const colors    = new Float32Array(N * 3);
-let cx = 0, cy = 0, cz = 0;
-
-for (let i = 0; i < N; i++) {
-  const p = s2t(traj.x[i], traj.y[i], traj.z[i]);
-  positions[i*3]   = p.x;
-  positions[i*3+1] = p.y;
-  positions[i*3+2] = p.z;
-  cx += p.x; cy += p.y; cz += p.z;
-
-  // HSL: hue 0.66 (blue) at t=0 → hue 0.00 (red) at t=1
-  const col = new THREE.Color().setHSL(0.666 * (1 - i / (N - 1)), 1.0, 0.55);
-  colors[i*3]   = col.r;
-  colors[i*3+1] = col.g;
-  colors[i*3+2] = col.b;
-}
-cx /= N; cy /= N; cz /= N;
-const trajCenter = new THREE.Vector3(cx, cy, cz);
-
-const trajGeom = new THREE.BufferGeometry();
-trajGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-trajGeom.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
-const trajLine = new THREE.Line(trajGeom, new THREE.LineBasicMaterial({ vertexColors: true }));
-scene.add(trajLine);
-
-// Start / end markers
-const markerMat0 = new THREE.MeshBasicMaterial({ color: 0x4488ff });
-const markerMat1 = new THREE.MeshBasicMaterial({ color: 0xff4444 });
-const markerGeom = new THREE.SphereGeometry(0.07, 10, 7);
-const startMark  = new THREE.Mesh(markerGeom, markerMat0);
-const endMark    = new THREE.Mesh(markerGeom, markerMat1);
-startMark.position.copy(s2t(traj.x[0],   traj.y[0],   traj.z[0]));
-endMark.position.copy(  s2t(traj.x[N-1], traj.y[N-1], traj.z[N-1]));
-scene.add(startMark); scene.add(endMark);
-
-// ════════════════════════════════════════════════════════════════════════════════
-// CAMERA HEAD MARKER (animated, quaternion-oriented)
-//
-// All child geometries are in headGroup local space. After applying
-// slamQuatToThree(), local +Y = Aria camera forward (gaze direction).
-//
-//  [sphere]  white  — head position
-//  [cone]    amber  — gaze cone, tip points in local +Y (= camera forward)
-//  [ray]     cyan   — gaze ray line extending 2 m forward along local +Y
-// ════════════════════════════════════════════════════════════════════════════════
-const SPHERE_R  = 0.055;
-// Vision cone: apex at head, opens forward along local +Y (= gaze direction).
-// CONE_H ≈ viewing distance, CONE_R gives ~25° half-angle FOV at that distance.
-const CONE_H    = 1.2;
-const CONE_R    = 0.55;
-const RAY_LEN   = 1.4;  // centre-axis ray, slightly longer than cone
-
-const headSphere = new THREE.Mesh(
-  new THREE.SphereGeometry(SPHERE_R, 12, 8),
-  new THREE.MeshBasicMaterial({ color: 0xffffff })
-);
-
-// Vision cone:
-//   ConeGeometry default → tip at local +Y, base at local -Y.
-//   rotation.x = π  → flips it: tip now toward headGroup -Y (behind head),
-//                      base now toward headGroup +Y (forward = gaze).
-//   position.y = CONE_H/2 → shifts it forward so tip lands at head centre (y=0)
-//                            and base rim is at y = CONE_H.
-const gazeCone = new THREE.Mesh(
-  new THREE.ConeGeometry(CONE_R, CONE_H, 32),
-  new THREE.MeshBasicMaterial({
-    color: 0xffaa22,
-    transparent: true,
-    opacity: 0.18,
-    side: THREE.DoubleSide,
-    depthWrite: false,
-  })
-);
-gazeCone.rotation.x = Math.PI;
-gazeCone.position.y = CONE_H / 2;
-
-// Centre-axis ray: thin line along the gaze direction for precision
-const gazeRayGeom = new THREE.BufferGeometry().setFromPoints([
-  new THREE.Vector3(0, 0, 0),
-  new THREE.Vector3(0, RAY_LEN, 0),
-]);
-const gazeRay = new THREE.Line(
-  gazeRayGeom,
-  new THREE.LineBasicMaterial({ color: 0xffdd88, transparent: true, opacity: 0.7 })
-);
-
-const headGroup = new THREE.Group();
-headGroup.add(headSphere);
-headGroup.add(gazeCone);
-headGroup.add(gazeRay);
-headGroup.position.copy(s2t(traj.x[0], traj.y[0], traj.z[0]));
-headGroup.quaternion.copy(slamQuatToThree(traj.qx[0], traj.qy[0], traj.qz[0], traj.qw[0]));
-scene.add(headGroup);
-
-// ════════════════════════════════════════════════════════════════════════════════
-// GAZE PRIMING POINTS
-// Yellow spheres  = object 3D location
-// Cyan spheres    = gaze point (where person was looking)
-// Thin lines connect them
-// ════════════════════════════════════════════════════════════════════════════════
-let gazeGroup = null;
-if (gaze && gaze.obj_x.length > 0) {
-  gazeGroup = new THREE.Group();
-  const M = gaze.obj_x.length;
-
-  const objGeom  = new THREE.SphereGeometry(0.045, 8, 6);
-  const gazeGeom = new THREE.SphereGeometry(0.028, 8, 6);
-  const objMat   = new THREE.MeshBasicMaterial({ color: 0xffcc00, transparent: true, opacity: 0.85 });
-  const gazeMat  = new THREE.MeshBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.75 });
-  const linkMat  = new THREE.LineBasicMaterial({ color: 0x445566, transparent: true, opacity: 0.4 });
-
-  for (let i = 0; i < M; i++) {
-    const op = s2t(gaze.obj_x[i],  gaze.obj_y[i],  gaze.obj_z[i]);
-    const gp = s2t(gaze.gaze_x[i], gaze.gaze_y[i], gaze.gaze_z[i]);
-
-    const om = new THREE.Mesh(objGeom,  objMat);  om.position.copy(op); gazeGroup.add(om);
-    const gm = new THREE.Mesh(gazeGeom, gazeMat); gm.position.copy(gp); gazeGroup.add(gm);
-    const lg = new THREE.BufferGeometry().setFromPoints([op, gp]);
-    gazeGroup.add(new THREE.Line(lg, linkMat));
-  }
-  scene.add(gazeGroup);
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
-// OBJECT MASK POSITIONS
-// Green spheres at the median 3D location of each manipulated object (fixture).
-// Labels via CSS2DRenderer so they scale correctly in 3D space.
-// ════════════════════════════════════════════════════════════════════════════════
-let objGroup = null;
-if (objects.length > 0) {
-  objGroup = new THREE.Group();
-  const objGeom = new THREE.SphereGeometry(0.06, 10, 7);
-  const objMat  = new THREE.MeshBasicMaterial({ color: 0x44ff88, transparent: true, opacity: 0.9 });
-
-  objects.forEach(obj => {
-    const pos = s2t(obj.x, obj.y, obj.z);
-
-    const sphere = new THREE.Mesh(objGeom, objMat);
-    sphere.position.copy(pos);
-    objGroup.add(sphere);
-
-    const div = document.createElement('div');
-    div.className = 'obj-label';
-    div.textContent = obj.label || obj.fixture;
-    const label = new CSS2DObject(div);
-    label.position.set(pos.x, pos.y + 0.12, pos.z);
-    objGroup.add(label);
-  });
-
-  scene.add(objGroup);
-  console.log(`[objects] ${objects.length} fixtures rendered`);
-}
-
-// ════════════════════════════════════════════════════════════════════════════════
-// KITCHEN MODEL (GLB)
-// Loaded without re-centering so world coordinates match SLAM data directly.
-// ════════════════════════════════════════════════════════════════════════════════
-let kitchenModel = null;
-
-function fitCameraToTrajectory() {
-  const dist = 5;
-  camera.position.set(trajCenter.x + dist, trajCenter.y + dist * 0.7, trajCenter.z + dist);
-  controls.target.copy(trajCenter);
-  controls.update();
-}
-
-new GLTFLoader().load(
-  '___GLB_PATH___',
-  (gltf) => {
-    kitchenModel = gltf.scene;
-    kitchenModel.traverse(n => { if (n.isMesh) { n.castShadow = true; n.receiveShadow = true; } });
-    scene.add(kitchenModel);
-    loadingEl.style.display = 'none';
-    fitCameraToTrajectory();
-  },
-  (xhr) => {
-    const pct = xhr.total ? Math.round(xhr.loaded / xhr.total * 100) : '…';
-    loadingEl.textContent = `Loading kitchen model… ${pct}%`;
-  },
-  (err) => {
-    console.warn('[kitchen] Load failed:', err.message);
-    loadingEl.textContent = '⚠ Kitchen model not found — showing trajectory only';
-    loadingEl.style.color = '#fa8';
-    setTimeout(() => { loadingEl.style.display = 'none'; }, 4000);
-    fitCameraToTrajectory();
-  }
-);
-
-// ════════════════════════════════════════════════════════════════════════════════
-// INFO PANEL — static fields
-// ════════════════════════════════════════════════════════════════════════════════
+// ── Info panel (static fields) ────────────────────────────────────────────────
+const DUR_S = info.duration_s;
 document.getElementById('vid-display').textContent = DATA.video_id || '—';
-document.getElementById('dur-display').textContent = DUR_S.toFixed(1) + 's  (' + N.toLocaleString() + ' pts)';
+document.getElementById('dur-display').textContent =
+  DUR_S.toFixed(1) + 's  (' + info.n_traj_points.toLocaleString() + ' pts)';
 
-// ════════════════════════════════════════════════════════════════════════════════
-// PLAYBACK
-// ════════════════════════════════════════════════════════════════════════════════
-let playing      = false;
-let currentUs    = T0;
-let speedFactor  = 1.0;
-let lastFrameMs  = null;
+// ── Playback state ────────────────────────────────────────────────────────────
+let playing     = false;
+let currentS    = 0;
+let speedFactor = 1.0;
+let lastFrameMs = null;
 
 const playBtn    = document.getElementById('play-btn');
 const timeSlider = document.getElementById('timeline');
 const timeDisp   = document.getElementById('time-display');
+const posDisp    = document.getElementById('pos-display');
 
 function fmt(s) {
   const m = Math.floor(s / 60), ss = Math.floor(s % 60);
   return `${m}:${ss.toString().padStart(2, '0')}`;
 }
 
-function bsearch(arr, val) {
-  let lo = 0, hi = arr.length - 1;
-  while (lo < hi) { const mid = (lo + hi) >> 1; arr[mid] < val ? lo = mid + 1 : hi = mid; }
-  return lo;
+function applyTime(s) {
+  currentS = Math.max(0, Math.min(DUR_S, s));
+  slam.setTime(currentS);
+  const p = slam.getCurrentPosition();
+  posDisp.textContent = `${p[0].toFixed(2)}, ${p[1].toFixed(2)}, ${p[2].toFixed(2)}`;
+  timeSlider.value = Math.round(DUR_S > 0 ? (currentS / DUR_S) * 10000 : 0);
+  timeDisp.textContent = `${fmt(currentS)} / ${fmt(DUR_S)}`;
 }
+applyTime(0);
 
-function setHeadAtTime(us) {
-  const clamped = Math.max(T0, Math.min(T1, us));
-  const idx = bsearch(traj.t, clamped);
-  const i   = Math.min(idx, N - 1);
-
-  // Interpolation factor between sample i-1 and i
-  let alpha = 0;
-  if (i > 0) {
-    const dt = traj.t[i] - traj.t[i-1];
-    if (dt > 0) alpha = Math.min(1, (clamped - traj.t[i-1]) / dt);
-  }
-
-  // ── Position: linear interpolation ────────────────────────────────────────
-  let px, py, pz;
-  if (i > 0 && alpha > 0) {
-    px = traj.x[i-1] + alpha * (traj.x[i] - traj.x[i-1]);
-    py = traj.y[i-1] + alpha * (traj.y[i] - traj.y[i-1]);
-    pz = traj.z[i-1] + alpha * (traj.z[i] - traj.z[i-1]);
-  } else {
-    px = traj.x[i]; py = traj.y[i]; pz = traj.z[i];
-  }
-  headGroup.position.copy(s2t(px, py, pz));
-
-  // ── Orientation: SLERP between adjacent SLAM quaternions, then convert ─────
-  // The SLAM quaternion (qx_world_device etc.) expresses the Aria device frame
-  // in SLAM world space. slamQuatToThree() converts it to Three.js convention
-  // so that headGroup's local +Y = camera forward (gaze direction).
-  const qi = new THREE.Quaternion(traj.qx[i], traj.qy[i], traj.qz[i], traj.qw[i]);
-  let slerpedQ;
-  if (i > 0 && alpha > 0) {
-    const qi1 = new THREE.Quaternion(traj.qx[i-1], traj.qy[i-1], traj.qz[i-1], traj.qw[i-1]);
-    slerpedQ = qi1.clone().slerp(qi, alpha);
-  } else {
-    slerpedQ = qi;
-  }
-  headGroup.quaternion.copy(slamQuatToThree(slerpedQ.x, slerpedQ.y, slerpedQ.z, slerpedQ.w));
-
-  // ── UI ────────────────────────────────────────────────────────────────────
-  const elapsedS = (clamped - T0) / 1e6;
-  timeSlider.value = Math.round((clamped - T0) / DUR_US * 10000);
-  timeDisp.textContent = `${fmt(elapsedS)} / ${fmt(DUR_S)}`;
-  document.getElementById('pos-display').textContent =
-    `${px.toFixed(2)}, ${py.toFixed(2)}, ${pz.toFixed(2)}`;
-}
-
+// ── Control wiring ────────────────────────────────────────────────────────────
 playBtn.addEventListener('click', () => {
   playing = !playing;
   playBtn.textContent = playing ? '⏸' : '▶';
@@ -592,54 +287,43 @@ document.addEventListener('keydown', (e) => {
 });
 
 timeSlider.addEventListener('input', () => {
-  currentUs = T0 + (timeSlider.value / 10000) * DUR_US;
-  setHeadAtTime(currentUs);
+  applyTime((timeSlider.value / 10000) * DUR_S);
 });
 
 document.getElementById('speed-select').addEventListener('change', (e) => {
   speedFactor = parseFloat(e.target.value);
 });
 
-document.getElementById('reset-cam').addEventListener('click', fitCameraToTrajectory);
+document.getElementById('reset-cam').addEventListener('click', () => slam.fitCamera());
 
-// Layer toggles
-document.getElementById('tog-kitchen').addEventListener('change', (e) => { if (kitchenModel) kitchenModel.visible = e.target.checked; });
-document.getElementById('tog-traj')   .addEventListener('change', (e) => { trajLine.visible = e.target.checked; startMark.visible = e.target.checked; endMark.visible = e.target.checked; });
-document.getElementById('tog-gaze')   .addEventListener('change', (e) => { if (gazeGroup) gazeGroup.visible = e.target.checked; });
-document.getElementById('tog-head')   .addEventListener('change', (e) => { headGroup.visible = e.target.checked; });
-document.getElementById('tog-objects').addEventListener('change', (e) => { if (objGroup) objGroup.visible = e.target.checked; });
-document.getElementById('tog-grid')   .addEventListener('change', (e) => { grid.visible = e.target.checked; });
+// ── Layer toggles ─────────────────────────────────────────────────────────────
+const wireLayer = (id, layer) => {
+  document.getElementById(id).addEventListener('change',
+    (e) => slam.setLayerVisible(layer, e.target.checked));
+};
+wireLayer('tog-kitchen',   'kitchen');
+wireLayer('tog-traj',      'trajectory');
+wireLayer('tog-gaze',      'gaze');
+wireLayer('tog-head',      'head');
+wireLayer('tog-objects',   'objects');
+wireLayer('tog-movements', 'movements');
+wireLayer('tog-grid',      'grid');
+document.getElementById('tog-mov-persist').addEventListener('change',
+  (e) => slam.setMovementsPersistent(e.target.checked));
 
-// ════════════════════════════════════════════════════════════════════════════════
-// RENDER LOOP
-// ════════════════════════════════════════════════════════════════════════════════
-function animate(nowMs) {
-  requestAnimationFrame(animate);
-
-  if (playing) {
-    if (lastFrameMs !== null) {
-      currentUs += (nowMs - lastFrameMs) * 1000 * speedFactor; // ms → µs
-      if (currentUs > T1) currentUs = T0; // loop
-    }
-    lastFrameMs = nowMs;
-    setHeadAtTime(currentUs);
+// ── Playback loop (drives setTime; module renders on its own rAF) ─────────────
+function tick(nowMs) {
+  requestAnimationFrame(tick);
+  if (!playing) { lastFrameMs = null; return; }
+  if (lastFrameMs !== null) {
+    const dt = (nowMs - lastFrameMs) / 1000 * speedFactor;
+    let next = currentS + dt;
+    if (next > DUR_S) next = 0;  // loop
+    applyTime(next);
   }
-
-  controls.update();
-  renderer.render(scene, camera);
-  labelRenderer.render(scene, camera);
+  lastFrameMs = nowMs;
 }
-
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  labelRenderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-// Initial state
-setHeadAtTime(T0);
-animate(0);
+requestAnimationFrame(tick);
 </script>
 </body>
 </html>
@@ -703,60 +387,111 @@ def load_gaze_priming(json_path: Path, video_id: str) -> dict | None:
                 gaze_x=gaze_x, gaze_y=gaze_y, gaze_z=gaze_z)
 
 
-def load_object_masks(mask_path: Path, assoc_path: Path | None, video_id: str) -> list[dict]:
-    """Return one entry per unique fixture with median 3D position and human-readable label."""
+def load_object_trajectories(mask_path: Path, assoc_path: Path, video_id: str,
+                              fps: float = 30.0) -> list[dict]:
+    """One entry per object with a time-ordered list of 3D keyframes.
+
+    Each keyframe = [t_video_seconds, x, y, z], derived from a mask's
+    `frame_number` and `3d_location`. The viewer animates each object's
+    sphere by interpolating between consecutive keyframes within the same
+    track's time_segment.
+    """
+    if not assoc_path.exists():
+        return []
     with open(mask_path) as f:
         mask_data = json.load(f)
+    with open(assoc_path) as f:
+        assoc_data = json.load(f)
 
-    masks_for_video = mask_data.get(video_id, {})
-    if not masks_for_video:
-        print(f"[objects] No mask data for {video_id}")
+    masks = mask_data.get(video_id, {})
+    objects = assoc_data.get(video_id, {})
+    if not masks or not objects:
+        print(f"[objects] No data for {video_id}")
         return []
 
-    # Build mask_id → object name from assoc_info (optional)
-    mask_to_name: dict[str, str] = {}
-    if assoc_path and assoc_path.exists():
-        with open(assoc_path) as f:
-            assoc_data = json.load(f)
-        for obj in assoc_data.get(video_id, {}).values():
-            name = obj.get('name', '')
-            for track in obj.get('tracks', []):
-                for mask_id in track.get('masks', []):
-                    mask_to_name[mask_id] = name
-
-    # Group positions by fixture; remember best label per fixture
-    from collections import defaultdict
-    positions: dict[str, list] = defaultdict(list)
-    labels: dict[str, str] = {}
-
-    for mask_id, entry in masks_for_video.items():
-        loc = entry.get('3d_location')
-        fixture = entry.get('fixture', '')
-        if loc is None or not fixture:
-            continue
-        positions[fixture].append(loc)
-        if fixture not in labels:
-            name = mask_to_name.get(mask_id, '')
-            # Fallback: strip participant prefix from fixture name (P01_mug.001 → mug.001)
-            labels[fixture] = name or ('_'.join(fixture.split('_')[1:]) if '_' in fixture else fixture)
-
-    # Median position per fixture
     result = []
-    for fixture, pts in positions.items():
-        xs = sorted(p[0] for p in pts)
-        ys = sorted(p[1] for p in pts)
-        zs = sorted(p[2] for p in pts)
-        n = len(xs)
-        result.append({
-            'x': round(xs[n // 2], 4),
-            'y': round(ys[n // 2], 4),
-            'z': round(zs[n // 2], 4),
-            'label':   labels[fixture],
-            'fixture': fixture,
-        })
+    for obj in objects.values():
+        name = obj.get('name', '')
+        # Collect [t, x, y, z, t_seg_start, t_seg_end] so the viewer can tell
+        # whether two consecutive keyframes belong to the same track.
+        keyframes = []
+        for track in obj.get('tracks', []):
+            t_seg = track.get('time_segment', [0, 0])
+            ts, te = float(t_seg[0]), float(t_seg[1])
+            for mid in track.get('masks', []):
+                m = masks.get(mid)
+                if not m:
+                    continue
+                loc = m.get('3d_location')
+                fr  = m.get('frame_number')
+                if loc is None or fr is None:
+                    continue
+                t = fr / fps
+                keyframes.append([
+                    round(t, 3),
+                    round(loc[0], 4), round(loc[1], 4), round(loc[2], 4),
+                    round(ts, 2), round(te, 2),
+                ])
+        if not keyframes:
+            continue
+        keyframes.sort(key=lambda k: k[0])
+        result.append({'name': name, 'keyframes': keyframes})
 
-    print(f"[objects] {len(result)} unique fixtures for {video_id}")
+    print(f"[objects] {len(result)} animated objects for {video_id}")
     return result
+
+
+def load_object_movements(mask_path: Path, assoc_path: Path, video_id: str,
+                          min_distance: float = 0.05) -> list[dict]:
+    """One movement per object track: 3D start → 3D end with timing.
+
+    Skips tracks shorter than `min_distance` metres (likely re-detections of
+    a stationary object).
+    """
+    if not assoc_path.exists():
+        return []
+    with open(mask_path) as f:
+        mask_data = json.load(f)
+    with open(assoc_path) as f:
+        assoc_data = json.load(f)
+
+    masks = mask_data.get(video_id, {})
+    objects = assoc_data.get(video_id, {})
+    if not masks or not objects:
+        print(f"[movements] No movement data for {video_id}")
+        return []
+
+    movements = []
+    for obj in objects.values():
+        name = obj.get('name', '')
+        for track in obj.get('tracks', []):
+            mask_ids = track.get('masks', [])
+            if len(mask_ids) < 2:
+                continue
+            t_seg = track.get('time_segment', [0, 0])
+            start_mask = masks.get(mask_ids[0])
+            end_mask   = masks.get(mask_ids[-1])
+            if not start_mask or not end_mask:
+                continue
+            sl = start_mask.get('3d_location')
+            el = end_mask.get('3d_location')
+            if not sl or not el:
+                continue
+            dx, dy, dz = el[0] - sl[0], el[1] - sl[1], el[2] - sl[2]
+            if (dx*dx + dy*dy + dz*dz) ** 0.5 < min_distance:
+                continue
+            movements.append({
+                'name': name,
+                'start': [round(v, 4) for v in sl],
+                'end':   [round(v, 4) for v in el],
+                'fixture_start': start_mask.get('fixture', ''),
+                'fixture_end':   end_mask.get('fixture', ''),
+                't_start': round(float(t_seg[0]), 2),
+                't_end':   round(float(t_seg[1]), 2),
+            })
+
+    print(f"[movements] {len(movements)} movements for {video_id}")
+    return movements
 
 
 def _r(arr, d=4):
@@ -764,17 +499,20 @@ def _r(arr, d=4):
 
 
 def build_data_json(participant: str, video_id: str, traj: dict,
-                    gaze: dict | None, objects: list[dict]) -> str:
+                    gaze: dict | None, objects: list[dict],
+                    movements: list[dict], glb_name: str | None = None) -> str:
     blob = {
         "participant": participant,
         "video_id":    video_id,
         "duration_s":  round(traj["duration_s"], 2),
-        "trajectory": {
-            "t":  traj["t"],
-            "x":  _r(traj["x"]), "y": _r(traj["y"]), "z": _r(traj["z"]),
-            "qx": _r(traj["qx"], 5), "qy": _r(traj["qy"], 5),
-            "qz": _r(traj["qz"], 5), "qw": _r(traj["qw"], 5),
-        },
+    }
+    if glb_name:
+        blob["glb"] = glb_name
+    blob["trajectory"] = {
+        "t":  traj["t"],
+        "x":  _r(traj["x"]), "y": _r(traj["y"]), "z": _r(traj["z"]),
+        "qx": _r(traj["qx"], 5), "qy": _r(traj["qy"], 5),
+        "qz": _r(traj["qz"], 5), "qw": _r(traj["qw"], 5),
     }
     if gaze:
         blob["gaze"] = {
@@ -783,6 +521,8 @@ def build_data_json(participant: str, video_id: str, traj: dict,
         }
     if objects:
         blob["objects"] = objects
+    if movements:
+        blob["movements"] = movements
     return json.dumps(blob, separators=(',', ':'))
 
 
@@ -811,10 +551,19 @@ def export_blend_to_glb(blend_path: Path, glb_path: Path, force: bool = False) -
 
 
 def generate_html(glb_filename: str, title: str, data_json: str) -> str:
+    if not SLAM_VIEWER_JS_PATH.exists():
+        sys.exit(f"[error] Missing shared module: {SLAM_VIEWER_JS_PATH}")
+    if not SLAM_VIEWER_CSS_PATH.exists():
+        sys.exit(f"[error] Missing shared CSS: {SLAM_VIEWER_CSS_PATH}")
+    slam_js  = SLAM_VIEWER_JS_PATH.read_text()
+    slam_css = SLAM_VIEWER_CSS_PATH.read_text()
+
     html = HTML_TEMPLATE
-    html = html.replace('___TITLE___',     title)
-    html = html.replace('___DATA_JSON___', data_json)
-    html = html.replace('___GLB_PATH___',  glb_filename)
+    html = html.replace('___SLAM_VIEWER_CSS___', slam_css)
+    html = html.replace('___SLAM_VIEWER_JS___',  slam_js)
+    html = html.replace('___TITLE___',           title)
+    html = html.replace('___DATA_JSON___',       data_json)
+    html = html.replace('___GLB_PATH___',        glb_filename)
     return html
 
 
@@ -847,6 +596,78 @@ def serve_and_open(serve_dir: Path, html_path: Path):
         srv.shutdown()
 
 
+# ── Batch export ───────────────────────────────────────────────────────────────
+
+def run_batch_export(args):
+    """Export slam_<video_id>.json for every session of args.participant.
+
+    Resolves the GLB once (export from .blend if needed) and then iterates over
+    all video MP4s in the participant's Videos/ folder, mapping session index
+    to video by sorted filename (same convention used in single-session main).
+    Skips sessions whose SLAM CSV does not exist.
+    """
+    participant = args.participant
+    out_dir = (REPO_ROOT / args.out).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Resolve GLB (once) ─────────────────────────────────────────────────────
+    if args.glb:
+        glb_path = Path(args.glb).resolve()
+        if not glb_path.exists():
+            sys.exit(f"[error] GLB not found: {glb_path}")
+    else:
+        blend_path = HPC_ROOT / 'Digital-Twin' / 'blenders' / f'{participant}_final.blend'
+        if not blend_path.exists():
+            sys.exit(f"[error] Blend not found on HPC: {blend_path}")
+        glb_path = out_dir / f'{participant}_final.glb'
+        export_blend_to_glb(blend_path, glb_path, args.force)
+
+    glb_in_out = out_dir / glb_path.name
+    if glb_path.resolve() != glb_in_out.resolve():
+        shutil.copy2(glb_path, glb_in_out)
+
+    # ── Discover sessions = videos for this participant ────────────────────────
+    vid_dir = HPC_ROOT / 'Videos' / participant
+    if not vid_dir.exists():
+        sys.exit(f"[error] Videos directory not found: {vid_dir}")
+    mp4s = sorted(vid_dir.glob('*.mp4'))
+    if not mp4s:
+        sys.exit(f"[error] No MP4 files in {vid_dir}")
+    print(f"[batch] {len(mp4s)} candidate sessions for {participant}")
+
+    gaze_path  = REPO_ROOT / 'eye-gaze-priming' / 'priming_info.json'
+    mask_path  = REPO_ROOT / 'scene-and-object-movements' / 'mask_info.json'
+    assoc_path = REPO_ROOT / 'scene-and-object-movements' / 'assoc_info.json'
+
+    ok, skipped = 0, 0
+    for sess, mp4 in enumerate(mp4s):
+        video_id = mp4.stem
+        slam_path = (HPC_ROOT / 'SLAM-and-Gaze' / participant
+                     / 'SLAM' / 'multi' / str(sess) / 'slam'
+                     / 'closed_loop_trajectory.csv')
+        if not slam_path.exists():
+            print(f"[skip] s{sess} {video_id}: no SLAM CSV")
+            skipped += 1
+            continue
+
+        print(f"\n[batch {sess+1}/{len(mp4s)}] {video_id}")
+        traj = load_trajectory(slam_path, args.subsample)
+        gaze = load_gaze_priming(gaze_path, video_id) if gaze_path.exists() else None
+        objects = (load_object_trajectories(mask_path, assoc_path, video_id)
+                   if mask_path.exists() else [])
+        movements = (load_object_movements(mask_path, assoc_path, video_id)
+                     if mask_path.exists() else [])
+
+        data_json = build_data_json(participant, video_id, traj, gaze, objects, movements,
+                                    glb_name=glb_in_out.name)
+        json_path = out_dir / f"slam_{video_id}.json"
+        json_path.write_text(data_json, encoding='utf-8')
+        print(f"[ok] {json_path.name} ({json_path.stat().st_size // 1024} KB)")
+        ok += 1
+
+    print(f"\n[batch done] {ok} exported, {skipped} skipped (out of {len(mp4s)})")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -873,7 +694,18 @@ def main():
                     help='Output directory for GLB + HTML (default: ./output)')
     ap.add_argument('--force', action='store_true', help='Re-export GLB even if it exists')
     ap.add_argument('--no-browser', action='store_true', help='Generate files, do not open browser')
+    ap.add_argument('--export-only', action='store_true',
+                    help='Save output/slam_<video_id>.json + GLB and exit (no HTML, no server). '
+                         'Use this to feed the integrated viewer.')
+    ap.add_argument('--all-videos', action='store_true',
+                    help='Export JSON for every session of --participant (implies --export-only)')
     args = ap.parse_args()
+
+    if args.all_videos:
+        if not args.participant:
+            sys.exit("[error] --all-videos requires --participant")
+        run_batch_export(args)
+        return
 
     out_dir = (REPO_ROOT / args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -953,12 +785,24 @@ def main():
 
     mask_path  = REPO_ROOT / 'scene-and-object-movements' / 'mask_info.json'
     assoc_path = REPO_ROOT / 'scene-and-object-movements' / 'assoc_info.json'
-    objects = (load_object_masks(mask_path, assoc_path, video_id)
+    objects = (load_object_trajectories(mask_path, assoc_path, video_id)
                if (mask_path.exists() and video_id) else [])
+    movements = (load_object_movements(mask_path, assoc_path, video_id)
+                 if (mask_path.exists() and video_id) else [])
 
-    data_json = build_data_json(participant or '?', video_id or '', traj, gaze, objects)
+    data_json = build_data_json(participant or '?', video_id or '', traj, gaze, objects, movements,
+                                glb_name=glb_in_out.name)
     size_kb = len(data_json.encode()) // 1024
     print(f"[data] JSON blob: {size_kb} KB")
+
+    # ── Export-only path: save slam_<video_id>.json and exit ───────────────────
+    if args.export_only:
+        if not video_id:
+            sys.exit("[error] --export-only requires a resolvable video_id (use --participant + --session or --video-id)")
+        json_path = out_dir / f"slam_{video_id}.json"
+        json_path.write_text(data_json, encoding='utf-8')
+        print(f"[ok] JSON: {json_path}  ({json_path.stat().st_size // 1024} KB)")
+        return
 
     # ── Generate HTML ──────────────────────────────────────────────────────────
     title = f"HD-EPIC SLAM — {participant}  session {args.session}"
