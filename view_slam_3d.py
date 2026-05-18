@@ -368,10 +368,15 @@ def load_gaze_priming(json_path: Path, video_id: str) -> dict | None:
 
     obj_x, obj_y, obj_z, gaze_x, gaze_y, gaze_z = [], [], [], [], [], []
     for ev in events.values():
+        if not isinstance(ev, dict):
+            continue
         for side in ('start', 'end'):
-            entry = ev.get(side, {})
+            entry = ev.get(side)
+            # Some events ship a non-dict (string, null) for a missing side.
+            if not isinstance(entry, dict):
+                continue
             loc   = entry.get('3d_location')
-            stats = entry.get('prime_stats', {})
+            stats = entry.get('prime_stats') or {}
             fp    = stats.get('frame_primed', -1)
             gp    = stats.get('gaze_point')
             if loc is None or fp < 0:
@@ -687,6 +692,11 @@ def run_batch_export(args):
         movements = (load_object_movements(mask_path, assoc_path, video_id)
                      if mask_path.exists() else [])
         video_t0 = load_video_t0_vrs_us(video_id)
+        if video_t0 is not None:
+            offset_s = (traj["t"][0] - video_t0) / 1e6
+            print(f"[align] video_t0 = {video_t0/1e6:.3f}s VRS  →  SLAM T0 ahead by {offset_s:+.3f}s")
+        else:
+            print(f"[align] no mp4_to_vrs CSV — video↔SLAM alignment will fall back to legacy")
 
         data_json = build_data_json(participant, video_id, traj, gaze, objects, movements,
                                     glb_name=glb_in_out.name,
