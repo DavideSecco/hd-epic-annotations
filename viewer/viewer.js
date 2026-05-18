@@ -1154,6 +1154,7 @@ document.getElementById('video-input').addEventListener('change', e => {
   dropHint.style.display = 'none';
   vid.style.display = 'block';
   applyVideoFilter();
+  initSlamForVideo(currentVideoId);
 });
 
 // Drag & drop on video area
@@ -1172,6 +1173,7 @@ videoWrap.addEventListener('drop', e => {
     dropHint.style.display = 'none';
     vid.style.display = 'block';
     applyVideoFilter();
+    initSlamForVideo(currentVideoId);
   }
 });
 
@@ -1281,11 +1283,14 @@ vid.addEventListener('timeupdate', () => {
   renderNutritionTracker(t);
   renderVqaPanel(t);
   highlightActive(t);
+  if (currentSlam && !_maskRafId) currentSlam.setTime(t);  // rAF handles playback
 });
 
 // Drive mask rendering at frame rate during playback via rAF
 function _maskRafTick() {
-  renderMaskBoxes(vid.currentTime);
+  const t = vid.currentTime;
+  renderMaskBoxes(t);
+  if (currentSlam) currentSlam.setTime(t);
   _maskRafId = requestAnimationFrame(_maskRafTick);
 }
 function _startMaskRaf() {
@@ -1552,6 +1557,111 @@ async function autoLoadDefaults() {
 
   setStatus('data ready — drop a video to begin');
 }
+
+// ---- SLAM 3D panel ----
+// Drives a shared scene (viewer/slam-viewer.js) synced with the video. Falls
+// back to a placeholder when no `output/slam_<video_id>.json` exists.
+let currentSlam       = null;
+let _slamInitVersion  = 0;
+let _slamModulePromise = null;
+const _slamHost        = document.getElementById('slam-host');
+const _slamPlaceholder = document.getElementById('slam-placeholder');
+const _slamToggleBtn   = document.getElementById('slam-toggle');
+
+const SLAM_ENABLED_KEY = 'hdepic.slamEnabled';
+const slamInitiallyOn  = localStorage.getItem(SLAM_ENABLED_KEY) !== '0';
+document.body.classList.toggle('no-slam', !slamInitiallyOn);
+_slamToggleBtn.classList.toggle('active', slamInitiallyOn);
+
+function loadSlamModule() {
+  if (!_slamModulePromise) {
+    _slamModulePromise = import('./slam-viewer.js').then(m => m.initSlamViewer);
+  }
+  return _slamModulePromise;
+}
+
+function showSlamPlaceholder(msg) {
+  if (_slamPlaceholder) {
+    _slamPlaceholder.textContent = msg;
+    _slamPlaceholder.style.display = '';
+  }
+}
+
+function hideSlamPlaceholder() {
+  if (_slamPlaceholder) _slamPlaceholder.style.display = 'none';
+}
+
+async function initSlamForVideo(videoId) {
+  const myVersion = ++_slamInitVersion;
+  if (currentSlam) {
+    currentSlam.destroy();
+    currentSlam = null;
+  }
+  if (!videoId) {
+    showSlamPlaceholder('Load a video to see the SLAM 3D scene');
+    return;
+  }
+  showSlamPlaceholder(`Loading 3D scene for ${videoId}…`);
+
+  // Probe data file first so 404 doesn't leak a half-mounted scene.
+  const dataUrl = `../output/slam_${videoId}.json`;
+  let dataRes;
+  try {
+    dataRes = await fetch(dataUrl);
+  } catch (e) {
+    if (myVersion === _slamInitVersion) showSlamPlaceholder(`No SLAM data for ${videoId}`);
+    return;
+  }
+  if (!dataRes.ok) {
+    if (myVersion === _slamInitVersion) showSlamPlaceholder(`No SLAM data for ${videoId}`);
+    return;
+  }
+
+  const participant = videoId.split('-')[0];
+  const glbUrl = `../output/${participant}_final.glb`;
+
+  let initSlamViewer;
+  try {
+    initSlamViewer = await loadSlamModule();
+  } catch (e) {
+    if (myVersion === _slamInitVersion) showSlamPlaceholder('Failed to load 3D module');
+    console.warn('[slam] module load failed:', e);
+    return;
+  }
+  if (myVersion !== _slamInitVersion) return;  // raced — newer call took over
+
+  let slam;
+  try {
+    slam = await initSlamViewer({
+      container: _slamHost,
+      dataUrl,
+      glbUrl,
+    });
+  } catch (e) {
+    if (myVersion === _slamInitVersion) showSlamPlaceholder('Failed to init 3D scene');
+    console.warn('[slam] init failed:', e);
+    return;
+  }
+  if (myVersion !== _slamInitVersion) {
+    slam.destroy();  // a newer init won the race
+    return;
+  }
+  currentSlam = slam;
+  hideSlamPlaceholder();
+  currentSlam.setTime(vid.currentTime || 0);
+}
+
+_slamToggleBtn.addEventListener('click', () => {
+  const wasOff = document.body.classList.toggle('no-slam');
+  const nowOn  = !wasOff;
+  _slamToggleBtn.classList.toggle('active', nowOn);
+  localStorage.setItem(SLAM_ENABLED_KEY, nowOn ? '1' : '0');
+  if (nowOn && currentSlam) {
+    // The host became visible again; force a resize + time refresh.
+    currentSlam.resize();
+    currentSlam.setTime(vid.currentTime || 0);
+  }
+});
 
 // hide video initially
 vid.style.display = 'none';

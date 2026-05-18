@@ -4,6 +4,15 @@
 <meta charset="UTF-8"/>
 <title>HD-EPIC Annotation Viewer</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="slam-viewer.css">
+<script type="importmap">
+{
+  "imports": {
+    "three":          "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+    "three/addons/":  "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+  }
+}
+</script>
 </head>
 <body>
 
@@ -13,6 +22,7 @@
   <input type="file" id="video-input" accept="video/*" style="display:none">
   <span id="video-name">no video loaded</span>
   <a id="yt-btn" class="file-btn" href="#" target="_blank" rel="noopener" style="display:none">&#9654; YouTube</a>
+  <button id="slam-toggle" class="file-btn" title="Toggle 3D scene">3D</button>
   <button class="file-btn" onclick="document.getElementById('annotations-input').click()">Load annotations (.pkl/.csv)</button>
   <input type="file" id="annotations-input" accept=".pkl,.pickle,.csv,application/octet-stream,text/csv" style="display:none">
   <span id="csv-name">no annotations loaded</span>
@@ -36,6 +46,9 @@
       <video id="vid" controls></video>
       <canvas id="bbox-canvas"></canvas>
       <div id="audio-hud"></div>
+    </div>
+    <div id="slam-host">
+      <div id="slam-placeholder">Load a video to see the SLAM 3D scene</div>
     </div>
     <div id="timeline-wrap">
       <div id="timeline-track">
