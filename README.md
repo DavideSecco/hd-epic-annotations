@@ -36,6 +36,80 @@ Aria glasses device calibration and frame-wise camera pose and gaze information.
 
 Full details are provided in the README in the link above.
 
+---
+
+## Visualization Tools
+
+Two interactive viewers built on top of this dataset. Both require Python 3 and a modern browser (**Chrome** recommended — Firefox has compositing issues with canvas overlays).
+
+### Setup
+
+**Dataset path** — `view_slam_3d.py` auto-discovers video/SLAM files from a root directory. Edit the `HPC_ROOT` constant at the top of the file to point to your local copy of the HD-EPIC dataset:
+
+```python
+# view_slam_3d.py, line ~38
+HPC_ROOT = Path("/path/to/HD-EPIC")
+```
+
+**Narrations CSV** — the annotation viewer expects a CSV version of the narrations pickle. A pre-converted copy is already included at `narrations-and-action-segments/unofficial_narrations_converted_from_pkl.csv`. If you need to regenerate it (requires `pandas`):
+
+```bash
+python3 -c "
+import pickle, pandas as pd
+df = pickle.load(open('narrations-and-action-segments/HD_EPIC_Narrations.pkl', 'rb'))
+df.to_csv('narrations-and-action-segments/unofficial_narrations_converted_from_pkl.csv', index=False)
+"
+```
+
+---
+
+### 1. Annotation Viewer
+
+```bash
+python3 serve_viewer.py          # opens browser automatically
+python3 serve_viewer.py --port 8080
+```
+
+Drop an MP4 video file onto the player. All annotations load automatically:
+
+- **Narrations** — scrolling list synced to playback, with search
+- **Audio events** — HUD overlay on the video
+- **Recipe** — auto-matched to the video ID; step panel + timeline track
+- **Object bounding boxes** — green overlay for tracked objects at the current frame
+- **Hand masks** — semi-transparent blue/red silhouettes for left/right hands
+
+Hand masks require a one-time extraction per video (~30 s, needs `Hands-Masks/contours_preds.zip` from the dataset):
+
+```bash
+python3 extract_hand_masks.py P01-20240204-152537   # one video
+python3 extract_hand_masks.py all                   # all videos (~2 GB, ~30 min)
+```
+
+Output goes to `hand-masks/{video_id}.json` and is picked up automatically by the viewer.
+
+---
+
+### 2. SLAM 3D Viewer
+
+Generates a standalone HTML file with the kitchen Digital Twin, camera trajectory, and gaze data.
+
+```bash
+python3 view_slam_3d.py --participant P01 --session 0   # auto-discovers all paths
+python3 view_slam_3d.py --participant P01 --session 5   # different recording session
+```
+
+- Kitchen 3D mesh (exported from the `.blend` Digital Twin)
+- Camera trajectory coloured by time (blue → red)
+- Camera orientation cone interpolated from SLAM quaternions
+- Gaze priming events (yellow/cyan spheres)
+- Tracked objects at their 3D locations (green spheres with labels)
+
+**Controls:** Space = play/pause · speed 0.25×–10× · layer toggles in side panel
+
+The first run for each participant exports the `.blend` to GLB — this requires **Blender** to be available in PATH. Subsequent runs reuse the cached `output/PXX_final.glb`. Use `--force` to re-export.
+
+---
+
 ## Narrations and Action Segments
 
 This folder contains narration annotations structured as follows:

@@ -1,5 +1,5 @@
 # HD-EPIC Annotation Viewer — Contesto sessione di lavoro
-> Aggiornato: 28 aprile 2026.
+> Aggiornato: 30 aprile 2026.
 
 ---
 
@@ -240,7 +240,28 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 
 ---
 
-## 7. Stato lavori al 29 aprile 2026
+## 7. Stato lavori al 30 aprile 2026
+
+### Fatto (30 aprile)
+- **Object trajectories animate nel viewer SLAM 3D** (`view_slam_3d.py`): ogni oggetto in `assoc_info.json` è una sfera verde che si muove seguendo le sue mask in `mask_info.json`.
+  - Funzione Python `load_object_trajectories()` (sostituisce `load_object_masks()`): produce `[{name, keyframes: [[t, x, y, z, t_seg_s, t_seg_e], ...]}, ...]`. `t = frame_number / 30` (FPS Aria).
+  - JS: `objectPositionAt(kfs, t)` con binary search → interpolazione lineare quando i due keyframe consecutivi appartengono allo **stesso track** (matching `t_seg_start`/`t_seg_end`); altrimenti snap al kf più vicino se `t` è dentro il suo `time_segment`; altrimenti sfera nascosta.
+  - 34 oggetti per `P01-20240202-110250` (vs 19 fixture statici prima), 124 keyframes totali, media 3.6/oggetto.
+  - Esempio: `juicer bowl` si muove smooth da `counter.008` (357.5s) a `counter.004` (389.6s).
+  - **Bug concettuale risolto**: prima le sfere erano una per fixture (counter, cupboard) con label arbitrario di un oggetto sopra di esso → statiche per definizione e label fuorvianti.
+
+- **Frecce movimento oggetti nel viewer SLAM 3D** (`view_slam_3d.py`): un `THREE.ArrowHelper` per ogni track in `assoc_info.json`.
+  - Funzione Python `load_object_movements()`: per ogni track produce `{name, start[3], end[3], fixture_start, fixture_end, t_start, t_end}`. Filtra movimenti < 5cm (re-detection di oggetti fermi).
+  - JS: colore dedotto dal nome via hash FNV-1a → HSL → `Color.setHSL()`. Label CSS2D `"{name}: {fixture_start} → {fixture_end}"` (prefisso `P01_` rimosso).
+  - Default: filtro temporale attivo (visibili solo le frecce del `time_segment` corrente). Toggle `all at once` per mostrarle tutte.
+  - 50 frecce per `P01-20240202-110250`, distanza media 48 cm (max 1.81 m).
+
+#### Caveat noto sull'allineamento temporale
+Il `frame_number` delle mask e il `time_segment` dei track sono in **tempo video**. Il playback usa `tracking_timestamp_us` (tempo SLAM/VRS). Attualmente assumo `elapsed_slam_s ≈ video_s`, ma l'offset reale tra inizio recording video e inizio sessione SLAM può essere di alcuni secondi. **Fix da fare**: usare `Videos/PXX/{video_id}_mp4_to_vrs_time_ns.csv` per mappare `tracking_timestamp_us` → `video_frame` con precisione sub-frame. Effetto attuale: oggetti e frecce appaiono leggermente sfasati rispetto alla traiettoria SLAM.
+
+#### Limitazioni intrinseche dei dati
+- Solo ~3.6 mask per oggetto in media → tra una mask e l'altra l'interpolazione è lineare nel mondo, ma fisicamente l'oggetto segue un arco (in mano). Migliorabile in futuro usando `wrist_and_palm_poses.csv` (HPC) per agganciare l'oggetto al palmo durante il volo.
+- Le `3d_location` sono inferite (depth + SLAM), rumorose specie per oggetti `mid-air` o piccoli.
 
 ### Fatto (29 aprile)
 - **Nutritional live tracker** (#6): pannello `#nutrition-panel` tra recipe e VQA. Funzioni: `extractNutritionTimeline()`, `renderNutritionPanel()`, `renderNutritionTracker(t)`. Globals: `nutritionTimeline`, `nutritionRecipeTotals`, `_lastNutritionAdded`.
@@ -321,7 +342,8 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 ### Cosa c'è già nel viewer 3D SLAM (`view_slam_3d.py`)
 - Traiettoria SLAM + cono di visione quaternionico
 - Gaze priming (sfere giallo/ciano)
-- **Sfere verdi** per oggetti manipolati nel video (da `mask_info.json`, posizione mediana 3D, etichetta CSS2D)
+- **Sfere verdi animate** per oggetti manipolati nel video: una sfera per oggetto in `assoc_info.json`, posizione interpolata tra le mask in `mask_info.json` (vedi §7 "Fatto 30 aprile"). Hidden quando `t` è fuori da tutti i `time_segment` dell'oggetto.
+- **Frecce di movimento** colorate per oggetto: una `ArrowHelper` per ogni track con label `"{name}: {fixture_start} → {fixture_end}"`. Default: filtro temporale; toggle `all at once` per overview completa.
 - Layer toggle per ogni layer
 
 ### Visualizzazioni 3D aggiuntive fattibili (ispirate al paper CVPR 2025)
@@ -332,7 +354,7 @@ Il paper HD-EPIC mostra una figura "Digital twin: Scene & Object Movements" con 
 |---|---|---|
 | **Point cloud** | `semidense_points.csv.gz` (HPC, 46 MB gzip) — colonne `px_world, py_world, pz_world` in world space | `THREE.Points` subsampliato, stesso transform SLAM `(x,y,z)→(x,z,-y)` |
 | **Surface mesh** | GLB da `.blend` | ✅ già presente |
-| **Frecce movimento oggetti** | `assoc_info.json` + `mask_info.json` | `THREE.ArrowHelper` tra `3d_location` prima/ultima mask di ogni track |
+| **Frecce movimento oggetti** | `assoc_info.json` + `mask_info.json` | ✅ **FATTO** (30 aprile) — `THREE.ArrowHelper` tra `3d_location` prima/ultima mask di ogni track, colorate per nome, filtrate per `time_segment` |
 | **Sagome 3D oggetti** | "37K object masks lifted to 3D" — **non in nostra copia locale** | ❌ non disponibile |
 
 #### Come costruire le frecce di movimento
@@ -360,8 +382,10 @@ Esempio reale (P01-20240202-110250, "juicer bowl"):
 - **Hands badge** su ogni narration — poco informativo
 - **Object movements in timeline** — `assoc_info.json` ha segmenti temporali; 34 oggetti per video, ogni oggetto con 1+ track `[start, end]`
 - **Nutritional live tracker** — ✅ **FATTO** (29 aprile, vedi §7)
-- **Frecce movimento oggetti nel viewer SLAM 3D** — da fare in `view_slam_3d.py`: `ArrowHelper` tra `3d_location` prima/ultima mask di ogni track per ogni oggetto in `assoc_info.json`; label `"{name}: {fixture_start} → {fixture_end}"`; filtrabile per intervallo temporale. Dati già disponibili in locale. Da fare in futuro.
-- **Integrazione viewer SLAM** nel viewer HTML come pannello
+- **Frecce movimento oggetti nel viewer SLAM 3D** — ✅ **FATTO** (30 aprile, vedi §7)
+- **Allineamento temporale preciso video ↔ SLAM** — attualmente assumo `elapsed_slam_s ≈ video_s` (offset di pochi secondi). Fix: usare `Videos/PXX/{video_id}_mp4_to_vrs_time_ns.csv` per mappatura sub-frame. Effetto: oggetti animati e frecce sono leggermente sfasati rispetto alla traiettoria SLAM (vedi §7 caveat).
+- **Object trajectory smoothing tramite hand tracking** — invece di interpolare lineare nel mondo tra due mask, agganciare l'oggetto al palmo (`wrist_and_palm_poses.csv` HPC) durante il volo. Migliora la fedeltà al video reale, dove gli oggetti seguono archi non rette.
+- **Integrazione viewer SLAM** nel viewer HTML come pannello — pianificata in [`PLAN_slam_integration.md`](PLAN_slam_integration.md), 3 sessioni stimate
 - **Eye gaze per-frame** nel viewer SLAM (da `general_eye_gaze.csv`, richiede allineamento temporale)
 
 ## 8. Comandi utili
@@ -375,8 +399,16 @@ python3 serve_viewer.py --port 8080
 python3 extract_hand_masks.py P01-20240204-152537
 python3 extract_hand_masks.py all   # tutti i 156 video (~2 GB, ~30 min)
 
-# SLAM viewer — comando principale
+# SLAM viewer — comando principale (genera HTML standalone, apre browser)
 python3 view_slam_3d.py --participant P01 --session 0
+
+# Export JSON dati SLAM per integrazione nel viewer principale (no HTML, no browser)
+python3 view_slam_3d.py --participant P01 --session 0 --export-only
+# → output/slam_<video_id>.json + output/PXX_final.glb
+
+# Batch: tutte le session di un partecipante (implica --export-only)
+python3 view_slam_3d.py --participant P01 --all-videos
+# Iterazione su tutti i video del participant; salta quelli senza SLAM CSV.
 
 # Altre sessioni / partecipanti
 python3 view_slam_3d.py --participant P02 --session 0
