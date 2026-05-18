@@ -1,5 +1,5 @@
 # HD-EPIC Annotation Viewer — Contesto sessione di lavoro
-> Aggiornato: 30 aprile 2026.
+> Aggiornato: 18 maggio 2026.
 
 ---
 
@@ -242,6 +242,19 @@ Blender, priming_info, mask_info e SLAM usano lo **stesso world-space**:
 
 ## 7. Stato lavori al 30 aprile 2026
 
+### Fatto (18 maggio 2026)
+
+- **Fase 2 — modulo `slam-viewer.js` estratto** ([PLAN_slam_integration.md](PLAN_slam_integration.md)): la logica three.js è ora un modulo ES condiviso (`viewer/slam-viewer.js`, 543 righe). API: `initSlamViewer({container, data|dataUrl, glbUrl}) → {setTime, setLayerVisible, setMovementsPersistent, fitCamera, resize, destroy, getInfo, getCurrentPosition}`. CSS namespaced in `viewer/slam-viewer.css` (`.slam-obj-label`, `.slam-mov-label`).
+  - `view_slam_3d.py` inline-inietta modulo+CSS al momento della generazione → l'HTML standalone resta self-contained (file:// funziona). File ridotto da 1305 a 820 righe.
+  - Smoke test isolato in `viewer/slam-test.html` (raggiungibile via `python3 serve_viewer.py` → `/viewer/slam-test.html`).
+
+- **Fase 3 — integrazione nel viewer principale**: il pannello SLAM vive ora dentro `viewer/index.html` sotto il video, sincronizzato col playback.
+  - `#video-panel` diventa flex-column: `#video-wrap` + nuovo `#slam-host` (32vh, min 240px) + `#timeline-wrap`. Toggle "3D" in topbar con stato persistito in `localStorage`.
+  - In `viewer.js`: `initSlamForVideo(videoId)` fa `import('./slam-viewer.js')` dinamicamente, probe `../output/slam_<id>.json` (placeholder elegante su 404), monta il modulo. Race-safe via `_slamInitVersion`.
+  - Sync: `slam.setTime(vid.currentTime)` chiamato dal listener `timeupdate` (paused/seek) e dal `_maskRafTick` (playback, ~30 Hz). Importmap CDN (jsdelivr) in `<head>` per `three` e `three/addons/`.
+
+- **Fix allineamento temporale video ↔ SLAM** (caveat risolto): `Videos/PXX/{video_id}_mp4_to_vrs_time_ns.csv` letto da `load_video_t0_vrs_us()` in `view_slam_3d.py`. Il `vrs_device_time_ns` della prima riga (= video frame 0 nel clock VRS) viene serializzato nel JSON come `video_t0_vrs_us`. `slam-viewer.js` ora calcola `setTime(tVideoS) → VIDEO_T0_US + tVideoS*1e6` invece di `T0 + tVideoS*1e6`. Per P01-20240202-110250 il drift era +1.500s. Fallback automatico al comportamento legacy se il campo manca nel JSON.
+
 ### Fatto (30 aprile)
 - **Object trajectories animate nel viewer SLAM 3D** (`view_slam_3d.py`): ogni oggetto in `assoc_info.json` è una sfera verde che si muove seguendo le sue mask in `mask_info.json`.
   - Funzione Python `load_object_trajectories()` (sostituisce `load_object_masks()`): produce `[{name, keyframes: [[t, x, y, z, t_seg_s, t_seg_e], ...]}, ...]`. `t = frame_number / 30` (FPS Aria).
@@ -313,6 +326,7 @@ Il `frame_number` delle mask e il `time_segment` dei track sono in **tempo video
 - **How/Why clauses**: pills arancioni (↳ how) e viola (✦ why) sotto ogni narration che ha un'entry nei JSON VQA `fine_grained_how/why_recognition.json`. Match per video_id + overlap temporale (±1s). Copertura sparsa (~500 entry how + 500 why su 156 video).
 - **Activity segments**: tutti i 9 CSV `high-level/activities/P0X_recipe_timestamps.csv` caricati in parallelo all'avvio → `allActivityData`. Corsia viola in cima alla timeline (sopra step/narration/audio). Label corrente mostrata in `step-context` come "Attività · Fase". Gestisce `end_time = "end"` come ∞. Implementazione: `getActivityAt()`, `allActivityData`, `activitySegments`.
 - **Nutritional live tracker**: pannello `#nutrition-panel` (tra recipe e VQA). Barra calorie + 3 mini-barre macro (Protein/Carbs/Fat) + lista ingredienti con ✓ tick. Timestamp `add` primario, `weigh` fallback. Gestisce ricette senza calorie e senza timestamp con messaggi informativi.
+- **Pannello SLAM 3D integrato** (`#slam-host` sotto il video, 32vh): scena three.js sincronizzata col playback. Importa `./slam-viewer.js` dinamicamente; carica `../output/slam_<video_id>.json` + `../output/<P>_final.glb`. Su 404 mostra placeholder "No SLAM data for {video_id}". Toggle "3D" in topbar (stato in `localStorage`). Sync via `setTime(vid.currentTime)` in `timeupdate` e nel mask rAF loop. Vedi `initSlamForVideo()` in `viewer.js`.
 
 ### Note tecniche bbox overlay
 - FPS assunto 30 (Aria glasses), finestra ±15 frame
@@ -383,10 +397,11 @@ Esempio reale (P01-20240202-110250, "juicer bowl"):
 - **Object movements in timeline** — `assoc_info.json` ha segmenti temporali; 34 oggetti per video, ogni oggetto con 1+ track `[start, end]`
 - **Nutritional live tracker** — ✅ **FATTO** (29 aprile, vedi §7)
 - **Frecce movimento oggetti nel viewer SLAM 3D** — ✅ **FATTO** (30 aprile, vedi §7)
-- **Allineamento temporale preciso video ↔ SLAM** — attualmente assumo `elapsed_slam_s ≈ video_s` (offset di pochi secondi). Fix: usare `Videos/PXX/{video_id}_mp4_to_vrs_time_ns.csv` per mappatura sub-frame. Effetto: oggetti animati e frecce sono leggermente sfasati rispetto alla traiettoria SLAM (vedi §7 caveat).
+- **Integrazione viewer SLAM nel viewer HTML come pannello** — ✅ **FATTO** (18 maggio, vedi §7)
+- **Allineamento temporale preciso video ↔ SLAM** — ✅ **FATTO** (18 maggio, vedi §7)
 - **Object trajectory smoothing tramite hand tracking** — invece di interpolare lineare nel mondo tra due mask, agganciare l'oggetto al palmo (`wrist_and_palm_poses.csv` HPC) durante il volo. Migliora la fedeltà al video reale, dove gli oggetti seguono archi non rette.
-- **Integrazione viewer SLAM** nel viewer HTML come pannello — pianificata in [`PLAN_slam_integration.md`](PLAN_slam_integration.md), 3 sessioni stimate
-- **Eye gaze per-frame** nel viewer SLAM (da `general_eye_gaze.csv`, richiede allineamento temporale)
+- **Eye gaze per-frame** nel viewer SLAM integrato (da `general_eye_gaze.csv`)
+- **P08 SLAM data** — 12 sessioni con dati ancora compressi in `SLAM-and-Gaze/P08/SLAM/multi/*.zip` (le directory estratte `multi/0/`, `multi/1/`, ... sono vuote). HPC read-only quindi non scompattabili lì. Per averli nel viewer integrato: leggere on-the-fly dal `.zip` con `zipfile` in `load_trajectory()`, oppure estrarre selettivamente i `closed_loop_trajectory.csv` (~760 MB totali) in una cartella locale e aggiungere un fallback path. Tutti gli altri partecipanti coperti (141 JSON su 156, 90%).
 
 ## 8. Comandi utili
 
@@ -409,6 +424,12 @@ python3 view_slam_3d.py --participant P01 --session 0 --export-only
 # Batch: tutte le session di un partecipante (implica --export-only)
 python3 view_slam_3d.py --participant P01 --all-videos
 # Iterazione su tutti i video del participant; salta quelli senza SLAM CSV.
+
+# Batch totale: tutti i partecipanti P01-P09 (~30-50 min, primo run esporta i GLB via Blender)
+for p in P01 P02 P03 P04 P05 P06 P07 P08 P09; do
+  python3 view_slam_3d.py --participant "$p" --all-videos
+done 2>&1 | tee /tmp/slam_batch.log
+grep '\[align\]' /tmp/slam_batch.log   # spot-check offset video↔SLAM per ogni sessione
 
 # Altre sessioni / partecipanti
 python3 view_slam_3d.py --participant P02 --session 0
