@@ -498,9 +498,36 @@ def _r(arr, d=4):
     return [round(v, d) for v in arr]
 
 
+def load_video_t0_vrs_us(video_id: str) -> int | None:
+    """Return the VRS device time (in microseconds) of the first MP4 frame.
+
+    Reads `Videos/<participant>/<video_id>_mp4_to_vrs_time_ns.csv` from the HPC
+    mount. The first data row's `vrs_device_time_ns` gives video t=0 in the same
+    VRS clock used by SLAM's `tracking_timestamp_us`. Returns None if the file
+    is unavailable (offline workflow). Without this anchor the viewer falls back
+    to assuming video_t=0 == SLAM_T0, which drifts by a couple of seconds.
+    """
+    if not video_id:
+        return None
+    participant = video_id.split('-')[0]
+    csv_path = HPC_ROOT / 'Videos' / participant / f'{video_id}_mp4_to_vrs_time_ns.csv'
+    if not csv_path.exists():
+        return None
+    try:
+        with open(csv_path, newline='') as f:
+            reader = csv.DictReader(f)
+            row = next(reader, None)
+        if not row or 'vrs_device_time_ns' not in row:
+            return None
+        return int(row['vrs_device_time_ns']) // 1000  # ns → µs
+    except (StopIteration, ValueError, KeyError):
+        return None
+
+
 def build_data_json(participant: str, video_id: str, traj: dict,
                     gaze: dict | None, objects: list[dict],
-                    movements: list[dict], glb_name: str | None = None) -> str:
+                    movements: list[dict], glb_name: str | None = None,
+                    video_t0_vrs_us: int | None = None) -> str:
     blob = {
         "participant": participant,
         "video_id":    video_id,
@@ -508,6 +535,8 @@ def build_data_json(participant: str, video_id: str, traj: dict,
     }
     if glb_name:
         blob["glb"] = glb_name
+    if video_t0_vrs_us is not None:
+        blob["video_t0_vrs_us"] = video_t0_vrs_us
     blob["trajectory"] = {
         "t":  traj["t"],
         "x":  _r(traj["x"]), "y": _r(traj["y"]), "z": _r(traj["z"]),
@@ -657,9 +686,11 @@ def run_batch_export(args):
                    if mask_path.exists() else [])
         movements = (load_object_movements(mask_path, assoc_path, video_id)
                      if mask_path.exists() else [])
+        video_t0 = load_video_t0_vrs_us(video_id)
 
         data_json = build_data_json(participant, video_id, traj, gaze, objects, movements,
-                                    glb_name=glb_in_out.name)
+                                    glb_name=glb_in_out.name,
+                                    video_t0_vrs_us=video_t0)
         json_path = out_dir / f"slam_{video_id}.json"
         json_path.write_text(data_json, encoding='utf-8')
         print(f"[ok] {json_path.name} ({json_path.stat().st_size // 1024} KB)")
@@ -789,9 +820,14 @@ def main():
                if (mask_path.exists() and video_id) else [])
     movements = (load_object_movements(mask_path, assoc_path, video_id)
                  if (mask_path.exists() and video_id) else [])
+    video_t0 = load_video_t0_vrs_us(video_id) if video_id else None
+    if video_t0 is not None:
+        offset_s = (traj["t"][0] - video_t0) / 1e6
+        print(f"[align] video_t0 = {video_t0/1e6:.3f}s VRS  →  SLAM T0 ahead by {offset_s:+.3f}s")
 
     data_json = build_data_json(participant or '?', video_id or '', traj, gaze, objects, movements,
-                                glb_name=glb_in_out.name)
+                                glb_name=glb_in_out.name,
+                                video_t0_vrs_us=video_t0)
     size_kb = len(data_json.encode()) // 1024
     print(f"[data] JSON blob: {size_kb} KB")
 

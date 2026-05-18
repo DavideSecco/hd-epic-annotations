@@ -82,7 +82,15 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
   const N  = traj.t.length;
   const T0 = traj.t[0];
   const T1 = traj.t[N - 1];
-  const DUR_S = (T1 - T0) / 1e6;
+
+  // Anchor for video↔SLAM alignment. When the dataset ships the MP4→VRS
+  // mapping CSV (Videos/<P>/<id>_mp4_to_vrs_time_ns.csv), `video_t0_vrs_us`
+  // is the VRS timestamp of video frame 0. setTime(tVideoS) then maps to
+  // VIDEO_T0_US + tVideoS*1e6 instead of T0 + tVideoS*1e6, which removes the
+  // few-seconds drift between SLAM start and video start. Fallback (no
+  // anchor): assume video t=0 == SLAM T0 (legacy behaviour).
+  const VIDEO_T0_US = (typeof data.video_t0_vrs_us === 'number') ? data.video_t0_vrs_us : T0;
+  const DUR_S = (T1 - VIDEO_T0_US) / 1e6;
 
   // ── Renderer + label renderer ────────────────────────────────────────────
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -402,7 +410,7 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
   }
 
   function setTime(tVideoS) {
-    setHeadAtSlamTime(T0 + tVideoS * 1e6);
+    setHeadAtSlamTime(VIDEO_T0_US + tVideoS * 1e6);
     updateMovementsAtTime(tVideoS);
     updateObjectsAtTime(tVideoS);
   }
