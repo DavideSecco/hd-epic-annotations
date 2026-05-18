@@ -26,6 +26,8 @@ const MASK_TOL   = 15;  // ±15 frames window (~±0.5 s)
 let handMaskData = null;  // {frame_str: {l?: counts_str, r?: counts_str}}
 const HAND_W = 1408, HAND_H = 1408;
 let _lastHandFrame = -1;   // frame-skip cache: avoid re-decoding same frame
+let _lastBoxFrame  = -2;   // frame-skip cache: avoid redoing the full bbox+hand draw
+let _handBufHasContent = false;  // skip drawImage when the offscreen mask is fully cleared
 let _maskRafId = null;
 // Off-screen compositing for hand masks (reuse buffers to avoid GC and stay fast even
 // with dense masks — some frames have >1M foreground pixels).
@@ -430,6 +432,7 @@ function syncBboxCanvas() {
   const wRect = videoWrap.getBoundingClientRect();
   bboxCanvas.width  = Math.round(wRect.width);
   bboxCanvas.height = Math.round(wRect.height);
+  _lastBoxFrame = -2;  // invalidate cache: geometry changed, force a fresh draw
 }
 
 // ---- COCO RLE decoder ----
@@ -491,15 +494,25 @@ function renderHandMasks(currentTime, offX, offY, vidW, vidH) {
       if (best.r) applyRLEToBuffer(decodeRLECounts(best.r), HAND_H, HAND_W, 255, 80,  80,  160, _handBuf);
     }
     _handCtx.putImageData(_handImgData, 0, 0);
+    _handBufHasContent = !!best && !!(best.l || best.r);
   }
 
-  // Always composite onto bboxCtx (clearRect in renderMaskBoxes erases it each tick)
-  bboxCtx.drawImage(_handCanvas, offX, offY, vidW, vidH);
+  // Skip the 1.98MP scaled blit when the offscreen mask is entirely transparent.
+  if (_handBufHasContent) bboxCtx.drawImage(_handCanvas, offX, offY, vidW, vidH);
 }
 
 function renderMaskBoxes(currentTime) {
+  if (!vid.videoWidth) { bboxCtx.clearRect(0, 0, bboxCanvas.width, bboxCanvas.height); return; }
+
+  // Frame-skip: the rAF loop fires at ~60 Hz but the video runs at 30 fps and
+  // the masks/bbox are quantised at MASK_FPS. If the underlying frame number
+  // hasn't moved, redoing clearRect + drawImage + the masksByFrame scan is
+  // pure waste on the main thread — and Firefox feels it as playback stutter.
+  const currentFrame = Math.round(currentTime * MASK_FPS);
+  if (currentFrame === _lastBoxFrame) return;
+  _lastBoxFrame = currentFrame;
+
   bboxCtx.clearRect(0, 0, bboxCanvas.width, bboxCanvas.height);
-  if (!vid.videoWidth) return;
 
   const vRect = vid.getBoundingClientRect();
   const wRect = videoWrap.getBoundingClientRect();
@@ -511,7 +524,6 @@ function renderMaskBoxes(currentTime) {
   renderHandMasks(currentTime, offX, offY, vRect.width, vRect.height);
 
   if (!masksByFrame.length) return;
-  const currentFrame = Math.round(currentTime * MASK_FPS);
   bboxCtx.lineWidth = 2;
   bboxCtx.font = 'bold 11px monospace';
 
@@ -1286,18 +1298,36 @@ vid.addEventListener('timeupdate', () => {
   if (currentSlam && !_maskRafId) currentSlam.setTime(t);  // rAF handles playback
 });
 
-// Drive mask rendering at frame rate during playback via rAF
-function _maskRafTick() {
-  const t = vid.currentTime;
+// Drive overlay rendering aligned with video frames.
+//
+// `requestVideoFrameCallback` fires once per *decoded video frame* (so 30 Hz
+// for 30 fps content), with a `metadata.mediaTime` matching the frame the
+// browser is about to present. This is strictly better than rAF, which fires
+// at the display refresh rate (~60 Hz on most monitors) and forces ~50%
+// redundant ticks where the video frame number hasn't moved. On Firefox the
+// difference is large enough to be the cause of perceived stutter: fewer
+// main-thread runs = less paint invalidation = smoother video.
+const _HAS_VFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+
+function _frameTick(_now, meta) {
+  const t = meta ? meta.mediaTime : vid.currentTime;
   renderMaskBoxes(t);
   if (currentSlam) currentSlam.setTime(t);
-  _maskRafId = requestAnimationFrame(_maskRafTick);
+  _maskRafId = _HAS_VFC
+    ? vid.requestVideoFrameCallback(_frameTick)
+    : requestAnimationFrame(_frameTick);
 }
 function _startMaskRaf() {
-  if (!_maskRafId) _maskRafId = requestAnimationFrame(_maskRafTick);
+  if (_maskRafId) return;
+  _maskRafId = _HAS_VFC
+    ? vid.requestVideoFrameCallback(_frameTick)
+    : requestAnimationFrame(_frameTick);
 }
 function _stopMaskRaf() {
-  if (_maskRafId) { cancelAnimationFrame(_maskRafId); _maskRafId = null; }
+  if (!_maskRafId) return;
+  if (_HAS_VFC) vid.cancelVideoFrameCallback(_maskRafId);
+  else          cancelAnimationFrame(_maskRafId);
+  _maskRafId = null;
 }
 vid.addEventListener('play',   _startMaskRaf);
 vid.addEventListener('pause',  () => { _stopMaskRaf(); renderMaskBoxes(vid.currentTime); });
