@@ -1,0 +1,25 @@
+/* HD-EPIC SLAM viewer — labels rendered via CSS2DRenderer.
+   Selectors are namespaced with `slam-` to avoid clashes with the host page. */
+
+.slam-obj-label {
+  color: #aaffcc;
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.slam-mov-label {
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 1px 5px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  user-select: none;
+}
