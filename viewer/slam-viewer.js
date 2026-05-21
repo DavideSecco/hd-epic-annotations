@@ -18,16 +18,72 @@ import { OrbitControls }              from 'three/addons/controls/OrbitControls.
 import { GLTFLoader }                 from 'three/addons/loaders/GLTFLoader.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
-// ── Coordinate transform: SLAM (Z-up, Y-forward) → Three.js (Y-up, -Z-forward) ──
-const _QA  = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2);
-const _QAI = new THREE.Quaternion( Math.SQRT1_2, 0, 0, Math.SQRT1_2);
+// ── Coordinate transforms: SLAM world (Z-up) → three.js world (Y-up) and
+//    Aria device frame → headGroup local frame ───────────────────────────
+//
+// SLAM world frame (Blender):  X right, Y forward, Z up.
+// three.js world frame:        X right, Y up,      -Z forward.
+// World basis change: W = R_x(-90°).
+//
+// Aria device frame (verified empirically against the trajectory: applying
+// q_world_device to (1,0,0) yields a vector with the SLAM-world Z component
+// near −1, i.e. "down", so the device's +X axis points DOWN):
+//   +X = down  (toward the chin)
+//   +Y = left  (out the user's left ear, required by right-handedness)
+//   +Z = forward
+// headGroup local frame (the one the gaze cone, ray and gaze formulae use):
+//   +X = right, +Y = forward, +Z = up.
+//
+// q_three_local = W · q_slam · Q_LOCAL⁻¹
+//   Q_LOCAL is the rotation that maps device-frame components to local-frame
+//   components: (a,b,c)_device → (-b, c, -a)_local. As a quaternion this is
+//   (-0.5, 0.5, 0.5, 0.5). Q_LOCAL⁻¹ is its conjugate.
+const _QW  = new THREE.Quaternion(-Math.SQRT1_2, 0, 0, Math.SQRT1_2); // R_x(-90°)
+const _QL_INV = new THREE.Quaternion(0.5, -0.5, -0.5, 0.5);            // (Q_LOCAL)⁻¹
 
 function s2t(x, y, z) { return new THREE.Vector3(x, z, -y); }
 
+// R_LOCAL_CPF: combined rotation CPF → headGroup-local frame.
+// = R_LOCAL * R_device_cpf, computed from projectaria_tools:
+//   R_device_cpf = T_device_cpf[:3,:3] from get_transform_device_cpf().to_matrix()
+//   (calibrated from VRS; confirmed consistent across Aria Gen 1 units)
+//   R_LOCAL maps Aria device (+X down, +Y left, +Z fwd) to local (+X right, +Y fwd, +Z up):
+//     local = (-dev_Y, dev_Z, -dev_X)
+// Columns of R_device_cpf = CPF basis vectors in device space:
+//   CPF +X (≈ left):  (-0.0319,  0.7934,  0.6079)
+//   CPF +Y (≈ up):    (-0.9986,  0.0000, -0.0523)
+//   CPF +Z (≈ fwd+R): (-0.0415, -0.6088,  0.7923)  // 37° right of SLAM-left-cam axis
+// R_LOCAL * R_device_cpf (R_LOCAL = [[0,-1,0],[0,0,1],[-1,0,0]]):
+const _R_LC = [
+  [-0.7934,  0.0000,  0.6088],  // row 0 = -R_dc row 1
+  [ 0.6079, -0.0523,  0.7923],  // row 1 =  R_dc row 2
+  [ 0.0319,  0.9986,  0.0415],  // row 2 = -R_dc row 0
+];
+
+// Head yaw correction for the gaze CONE (visual indicator of camera axis).
+// The cone follows headGroup which is aligned to the SLAM LEFT-mono-camera axis.
+// Tunable live via console (e.g. window.HEAD_YAW_CORRECTION_DEG = -40 to
+// rotate the cone toward the binocular center). Default 0 = raw SLAM axis.
+// The gaze RAY uses _R_LC (calibration-based) and is unaffected by this.
+// −37° = calibrated angle from SLAM-left-camera axis to CPF +Z (binocular centre).
+// Derived from arccos(CPF_fwd · device_fwd) in the horizontal plane using VRS calib.
+// (−40° was the prior empirical value; −37° matches the VRS R_device_cpf matrix.)
+window.HEAD_YAW_CORRECTION_DEG = (typeof window.HEAD_YAW_CORRECTION_DEG === 'number')
+  ? window.HEAD_YAW_CORRECTION_DEG
+  : -37;
+const _HEAD_YAW_AXIS = new THREE.Vector3(0, 0, 1);
+const _headYawQ = new THREE.Quaternion();
+
 function slamQuatToThree(qx, qy, qz, qw) {
-  return _QA.clone()
+  const out = _QW.clone()
     .multiply(new THREE.Quaternion(qx, qy, qz, qw))
-    .multiply(_QAI);
+    .multiply(_QL_INV);
+  const corrRad = (window.HEAD_YAW_CORRECTION_DEG || 0) * Math.PI / 180;
+  if (corrRad !== 0) {
+    _headYawQ.setFromAxisAngle(_HEAD_YAW_AXIS, corrRad);
+    out.multiply(_headYawQ);
+  }
+  return out;
 }
 
 function nameToHue(name) {
@@ -53,7 +109,7 @@ function bsearch(arr, val) {
   return lo;
 }
 
-const VALID_LAYERS = ['kitchen', 'trajectory', 'head', 'gaze', 'objects', 'movements', 'grid'];
+const VALID_LAYERS = ['kitchen', 'trajectory', 'head', 'gaze', 'gazeRay', 'objects', 'movements', 'grid'];
 
 /**
  * Mount a SLAM viewer in the given container.
@@ -171,7 +227,7 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
 
   // ── Camera head: sphere + cone (gaze direction) + ray ────────────────────
   const SPHERE_R = 0.055;
-  const CONE_H = 1.2, CONE_R = 0.55, RAY_LEN = 1.4;
+  const CONE_H = 3.0, CONE_R = 1.4, RAY_LEN = 3.5;
 
   const headSphereGeom = new THREE.SphereGeometry(SPHERE_R, 12, 8);
   const headSphereMat  = new THREE.MeshBasicMaterial({ color: 0xffffff });
@@ -204,6 +260,72 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
 
   // Track current SLAM-space position for getCurrentPosition()
   let _currentSlamPos = [traj.x[0], traj.y[0], traj.z[0]];
+
+  // ── Per-frame eye gaze ray (from general_eye_gaze.csv via Python) ────────
+  //
+  // Not parented to headGroup (visibility independent). A sibling group is kept
+  // in sync with headGroup pose in setHeadAtSlamTime. Direction is computed in
+  // headGroup-local space via _R_LC (CPF → local calibration matrix).
+  // Length clamped to [0.15, 3.0] m.
+  const eyeGaze   = data.eye_gaze || null;
+  let gazeRayDyn      = null;
+  let gazeRayGroupDyn = null;     // mirrors headGroup pose so visibility is independent
+  let gazeRayDynGeom  = null;
+  let gazeRayDynMat   = null;
+  let gazeRayDynPos   = null;     // Float32Array(6) — [origin, tip] in local frame
+  if (eyeGaze && eyeGaze.t.length > 0) {
+    gazeRayDynPos  = new Float32Array(6);
+    gazeRayDynGeom = new THREE.BufferGeometry();
+    gazeRayDynGeom.setAttribute('position', new THREE.BufferAttribute(gazeRayDynPos, 3));
+    gazeRayDynMat  = new THREE.LineBasicMaterial({
+      color: 0x88ffaa, transparent: true, opacity: 0.95, depthWrite: false,
+    });
+    gazeRayDyn = new THREE.Line(gazeRayDynGeom, gazeRayDynMat);
+    // Keep the ray decoupled from headGroup so toggling 'head' off doesn't also
+    // hide the ray (parent visibility cascades to children in three.js). The
+    // sibling group is kept in sync with head pose inside setHeadAtSlamTime.
+    gazeRayGroupDyn = new THREE.Group();
+    gazeRayGroupDyn.add(gazeRayDyn);
+    scene.add(gazeRayGroupDyn);
+  }
+
+  // Linearly interpolate the 10 Hz CPF gaze samples to the current SLAM time
+  // so the ray (and 2D dot in the integrated viewer) move smoothly between
+  // captures instead of snapping every ~100 ms.
+  function _gazeAtSlamUs(slam_us) {
+    const ts = eyeGaze.t;
+    const lo = bsearch(ts, slam_us);
+    const i  = Math.min(lo, ts.length - 1);
+    if (i === 0 || ts[i] === slam_us) {
+      return { yaw: eyeGaze.yaw[i], pitch: eyeGaze.pitch[i], depth: eyeGaze.depth[i] };
+    }
+    const t0 = ts[i - 1], t1 = ts[i];
+    const dt = t1 - t0;
+    const a  = dt > 0 ? Math.max(0, Math.min(1, (slam_us - t0) / dt)) : 0;
+    return {
+      yaw:   eyeGaze.yaw[i - 1]   + a * (eyeGaze.yaw[i]   - eyeGaze.yaw[i - 1]),
+      pitch: eyeGaze.pitch[i - 1] + a * (eyeGaze.pitch[i] - eyeGaze.pitch[i - 1]),
+      depth: eyeGaze.depth[i - 1] + a * (eyeGaze.depth[i] - eyeGaze.depth[i - 1]),
+    };
+  }
+
+  function updateGazeRayAtSlamTime(slam_us) {
+    if (!gazeRayDyn) return;
+    const g = _gazeAtSlamUs(slam_us);
+    const depth = Math.max(0.15, Math.min(3.0, g.depth || 1.0));
+    // CPF convention: +X left, +Y up, +Z forward.
+    //   yaw+  = looking LEFT  (confirmed by vergence: right_yaw > left_yaw)
+    //   pitch+ = looking UP   (confirmed: mean pitch ≈ -0.17 = looking down)
+    // d_cpf = (sin(yaw)*cos(pitch), sin(pitch), cos(yaw)*cos(pitch))
+    // d_local = _R_LC * d_cpf  (precomputed R_LOCAL * R_device_cpf from VRS calib)
+    const cp = Math.cos(g.pitch), sp = Math.sin(g.pitch);
+    const cy = Math.cos(g.yaw),   sy = Math.sin(g.yaw);
+    const dx = sy * cp, dy = sp, dz = cy * cp;
+    gazeRayDynPos[3] = (_R_LC[0][0]*dx + _R_LC[0][1]*dy + _R_LC[0][2]*dz) * depth;
+    gazeRayDynPos[4] = (_R_LC[1][0]*dx + _R_LC[1][1]*dy + _R_LC[1][2]*dz) * depth;
+    gazeRayDynPos[5] = (_R_LC[2][0]*dx + _R_LC[2][1]*dy + _R_LC[2][2]*dz) * depth;
+    gazeRayDynGeom.attributes.position.needsUpdate = true;
+  }
 
   // ── Gaze priming spheres ─────────────────────────────────────────────────
   let gazeGroup = null;
@@ -407,12 +529,21 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
       slerpedQ = qi;
     }
     headGroup.quaternion.copy(slamQuatToThree(slerpedQ.x, slerpedQ.y, slerpedQ.z, slerpedQ.w));
+
+    // Keep the gaze-ray group glued to the head so its endpoint math (local
+    // frame) stays valid even though it is not parented to headGroup.
+    if (gazeRayGroupDyn) {
+      gazeRayGroupDyn.position.copy(headGroup.position);
+      gazeRayGroupDyn.quaternion.copy(headGroup.quaternion);
+    }
   }
 
   function setTime(tVideoS) {
-    setHeadAtSlamTime(VIDEO_T0_US + tVideoS * 1e6);
+    const slam_us = VIDEO_T0_US + tVideoS * 1e6;
+    setHeadAtSlamTime(slam_us);
     updateMovementsAtTime(tVideoS);
     updateObjectsAtTime(tVideoS);
+    updateGazeRayAtSlamTime(slam_us);
   }
 
   setTime(0);
@@ -451,6 +582,7 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
       case 'trajectory': trajLine.visible = startMark.visible = endMark.visible = visible; break;
       case 'head':       headGroup.visible = visible; break;
       case 'gaze':       if (gazeGroup) gazeGroup.visible = visible; break;
+      case 'gazeRay':    if (gazeRayDyn) gazeRayDyn.visible = visible; break;
       case 'objects':    if (objGroup)  objGroup.visible = visible; break;
       case 'movements':  if (movGroup)  movGroup.visible = visible; break;
       case 'grid':       grid.visible = visible; break;
@@ -472,6 +604,7 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
       n_objects:      objects.length,
       n_movements:    movements.length,
       n_gaze_events:  gaze ? gaze.obj_x.length : 0,
+      n_eye_gaze:     eyeGaze ? eyeGaze.t.length : 0,
       kitchenLoaded,
       validLayers:    VALID_LAYERS.slice(),
     };
@@ -479,6 +612,15 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
 
   function getCurrentPosition() {
     return _currentSlamPos.slice();
+  }
+
+  // Per-frame gaze (CPF) at a given video time, or null when no data exists.
+  // Returned as plain radians + metres so callers can do their own projection
+  // (e.g. the integrated viewer overlays a 2D dot on the MP4 frame). Linearly
+  // interpolated between consecutive 10 Hz samples — same as the 3D ray.
+  function getGazeAtTime(tVideoS) {
+    if (!eyeGaze) return null;
+    return _gazeAtSlamUs(VIDEO_T0_US + tVideoS * 1e6);
   }
 
   // ── Destroy ──────────────────────────────────────────────────────────────
@@ -498,6 +640,7 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
     [
       headSphereGeom, headSphereMat, gazeConeGeom, gazeConeMat,
       gazeRayGeom, gazeRayMat,
+      gazeRayDynGeom, gazeRayDynMat,
       markerGeom, markerMat0, markerMat1,
       trajGeom, trajLineMat,
       ...gazeResources, ...objResources,
@@ -547,5 +690,6 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
     destroy,
     getInfo,
     getCurrentPosition,
+    getGazeAtTime,
   };
 }
