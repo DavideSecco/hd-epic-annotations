@@ -52,19 +52,11 @@ function s2t(x, y, z) { return new THREE.Vector3(x, z, -y); }
 // Columns of R_device_cpf = CPF basis vectors in device space:
 //   CPF +X (≈ left):  (-0.0319,  0.7934,  0.6079)
 //   CPF +Y (≈ up):    (-0.9986,  0.0000, -0.0523)
-//   CPF +Z (≈ fwd+R): (-0.0415, -0.6088,  0.7923)  // 37° right of SLAM-left-cam axis
-// R_LOCAL * R_device_cpf (R_LOCAL = [[0,-1,0],[0,0,1],[-1,0,0]]):
-const _R_LC = [
-  [-0.7934,  0.0000,  0.6088],  // row 0 = -R_dc row 1
-  [ 0.6079, -0.0523,  0.7923],  // row 1 =  R_dc row 2
-  [ 0.0319,  0.9986,  0.0415],  // row 2 = -R_dc row 0
-];
-
 // Head yaw correction for the gaze CONE (visual indicator of camera axis).
 // The cone follows headGroup which is aligned to the SLAM LEFT-mono-camera axis.
 // Tunable live via console (e.g. window.HEAD_YAW_CORRECTION_DEG = -40 to
 // rotate the cone toward the binocular center). Default 0 = raw SLAM axis.
-// The gaze RAY uses _R_LC (calibration-based) and is unaffected by this.
+// The gaze RAY uses gaze_direction_in_world (world-space, no calibration needed).
 // −37° = calibrated angle from SLAM-left-camera axis to CPF +Z (binocular centre).
 // Derived from arccos(CPF_fwd · device_fwd) in the horizontal plane using VRS calib.
 // (−40° was the prior empirical value; −37° matches the VRS R_device_cpf matrix.)
@@ -261,19 +253,18 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
   // Track current SLAM-space position for getCurrentPosition()
   let _currentSlamPos = [traj.x[0], traj.y[0], traj.z[0]];
 
-  // ── Per-frame eye gaze ray (from general_eye_gaze.csv via Python) ────────
+  // ── Per-frame gaze ray (from framewise_info.jsonl via Python) ──────────────
   //
-  // Not parented to headGroup (visibility independent). A sibling group is kept
-  // in sync with headGroup pose in setHeadAtSlamTime. Direction is computed in
-  // headGroup-local space via _R_LC (CPF → local calibration matrix).
-  // Length clamped to [0.15, 3.0] m.
-  const eyeGaze   = data.eye_gaze || null;
-  let gazeRayDyn      = null;
-  let gazeRayGroupDyn = null;     // mirrors headGroup pose so visibility is independent
-  let gazeRayDynGeom  = null;
-  let gazeRayDynMat   = null;
-  let gazeRayDynPos   = null;     // Float32Array(6) — [origin, tip] in local frame
-  if (eyeGaze && eyeGaze.t.length > 0) {
+  // gaze_direction_in_world is already in SLAM world space (Z-up), so we only
+  // need s2t() to map to three.js world space — no calibration matrix needed.
+  // The ray is drawn directly in world space (origin = headGroup.position).
+  // Not parented to headGroup so toggling 'head' off doesn't hide the ray.
+  const gazeWorld = data.gaze_world || null;
+  let gazeRayDyn     = null;
+  let gazeRayDynGeom = null;
+  let gazeRayDynMat  = null;
+  let gazeRayDynPos  = null;   // Float32Array(6) — [origin xyz, tip xyz] in world space
+  if (gazeWorld && gazeWorld.t_us.length > 0) {
     gazeRayDynPos  = new Float32Array(6);
     gazeRayDynGeom = new THREE.BufferGeometry();
     gazeRayDynGeom.setAttribute('position', new THREE.BufferAttribute(gazeRayDynPos, 3));
@@ -281,49 +272,34 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
       color: 0x88ffaa, transparent: true, opacity: 0.95, depthWrite: false,
     });
     gazeRayDyn = new THREE.Line(gazeRayDynGeom, gazeRayDynMat);
-    // Keep the ray decoupled from headGroup so toggling 'head' off doesn't also
-    // hide the ray (parent visibility cascades to children in three.js). The
-    // sibling group is kept in sync with head pose inside setHeadAtSlamTime.
-    gazeRayGroupDyn = new THREE.Group();
-    gazeRayGroupDyn.add(gazeRayDyn);
-    scene.add(gazeRayGroupDyn);
+    scene.add(gazeRayDyn);
   }
 
-  // Linearly interpolate the 10 Hz CPF gaze samples to the current SLAM time
-  // so the ray (and 2D dot in the integrated viewer) move smoothly between
-  // captures instead of snapping every ~100 ms.
+  // Linearly interpolate the ~5 Hz gaze world-direction samples to SLAM time.
   function _gazeAtSlamUs(slam_us) {
-    const ts = eyeGaze.t;
+    const ts = gazeWorld.t_us;
     const lo = bsearch(ts, slam_us);
     const i  = Math.min(lo, ts.length - 1);
     if (i === 0 || ts[i] === slam_us) {
-      return { yaw: eyeGaze.yaw[i], pitch: eyeGaze.pitch[i], depth: eyeGaze.depth[i] };
+      return { dx: gazeWorld.dx[i], dy: gazeWorld.dy[i], dz: gazeWorld.dz[i] };
     }
     const t0 = ts[i - 1], t1 = ts[i];
-    const dt = t1 - t0;
-    const a  = dt > 0 ? Math.max(0, Math.min(1, (slam_us - t0) / dt)) : 0;
+    const a  = t1 > t0 ? Math.max(0, Math.min(1, (slam_us - t0) / (t1 - t0))) : 0;
     return {
-      yaw:   eyeGaze.yaw[i - 1]   + a * (eyeGaze.yaw[i]   - eyeGaze.yaw[i - 1]),
-      pitch: eyeGaze.pitch[i - 1] + a * (eyeGaze.pitch[i] - eyeGaze.pitch[i - 1]),
-      depth: eyeGaze.depth[i - 1] + a * (eyeGaze.depth[i] - eyeGaze.depth[i - 1]),
+      dx: gazeWorld.dx[i-1] + a * (gazeWorld.dx[i] - gazeWorld.dx[i-1]),
+      dy: gazeWorld.dy[i-1] + a * (gazeWorld.dy[i] - gazeWorld.dy[i-1]),
+      dz: gazeWorld.dz[i-1] + a * (gazeWorld.dz[i] - gazeWorld.dz[i-1]),
     };
   }
 
   function updateGazeRayAtSlamTime(slam_us) {
     if (!gazeRayDyn) return;
     const g = _gazeAtSlamUs(slam_us);
-    const depth = Math.max(0.15, Math.min(3.0, g.depth || 1.0));
-    // CPF convention: +X left, +Y up, +Z forward.
-    //   yaw+  = looking LEFT  (confirmed by vergence: right_yaw > left_yaw)
-    //   pitch+ = looking UP   (confirmed: mean pitch ≈ -0.17 = looking down)
-    // d_cpf = (sin(yaw)*cos(pitch), sin(pitch), cos(yaw)*cos(pitch))
-    // d_local = _R_LC * d_cpf  (precomputed R_LOCAL * R_device_cpf from VRS calib)
-    const cp = Math.cos(g.pitch), sp = Math.sin(g.pitch);
-    const cy = Math.cos(g.yaw),   sy = Math.sin(g.yaw);
-    const dx = sy * cp, dy = sp, dz = cy * cp;
-    gazeRayDynPos[3] = (_R_LC[0][0]*dx + _R_LC[0][1]*dy + _R_LC[0][2]*dz) * depth;
-    gazeRayDynPos[4] = (_R_LC[1][0]*dx + _R_LC[1][1]*dy + _R_LC[1][2]*dz) * depth;
-    gazeRayDynPos[5] = (_R_LC[2][0]*dx + _R_LC[2][1]*dy + _R_LC[2][2]*dz) * depth;
+    // SLAM world (Z-up) → three.js world (Y-up): s2t maps (x,y,z) → (x, z, -y)
+    const tx = g.dx, ty = g.dz, tz = -g.dy;
+    const ox = headGroup.position.x, oy = headGroup.position.y, oz = headGroup.position.z;
+    gazeRayDynPos[0] = ox;                  gazeRayDynPos[1] = oy;                  gazeRayDynPos[2] = oz;
+    gazeRayDynPos[3] = ox + tx * RAY_LEN;   gazeRayDynPos[4] = oy + ty * RAY_LEN;   gazeRayDynPos[5] = oz + tz * RAY_LEN;
     gazeRayDynGeom.attributes.position.needsUpdate = true;
   }
 
@@ -530,12 +506,6 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
     }
     headGroup.quaternion.copy(slamQuatToThree(slerpedQ.x, slerpedQ.y, slerpedQ.z, slerpedQ.w));
 
-    // Keep the gaze-ray group glued to the head so its endpoint math (local
-    // frame) stays valid even though it is not parented to headGroup.
-    if (gazeRayGroupDyn) {
-      gazeRayGroupDyn.position.copy(headGroup.position);
-      gazeRayGroupDyn.quaternion.copy(headGroup.quaternion);
-    }
   }
 
   function setTime(tVideoS) {
@@ -604,7 +574,7 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
       n_objects:      objects.length,
       n_movements:    movements.length,
       n_gaze_events:  gaze ? gaze.obj_x.length : 0,
-      n_eye_gaze:     eyeGaze ? eyeGaze.t.length : 0,
+      n_gaze_world:   gazeWorld ? gazeWorld.t_us.length : 0,
       kitchenLoaded,
       validLayers:    VALID_LAYERS.slice(),
     };
@@ -639,8 +609,7 @@ export async function initSlamViewer({ container, data, dataUrl, glbUrl } = {}) 
     // Dispose explicit shared resources
     [
       headSphereGeom, headSphereMat, gazeConeGeom, gazeConeMat,
-      gazeRayGeom, gazeRayMat,
-      gazeRayDynGeom, gazeRayDynMat,
+      gazeRayGeom, gazeRayMat, gazeRayDynGeom, gazeRayDynMat,
       markerGeom, markerMat0, markerMat1,
       trajGeom, trajLineMat,
       ...gazeResources, ...objResources,
