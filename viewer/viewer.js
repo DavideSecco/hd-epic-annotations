@@ -14,6 +14,7 @@ const searchInput = document.getElementById('search');
 const tStart = document.getElementById('t-start');
 const tCur = document.getElementById('t-cur');
 const tEnd = document.getElementById('t-end');
+const timeMsOverlay = document.getElementById('time-ms-overlay');
 
 // ---- Object mask state ----
 let allMaskData  = null;
@@ -24,6 +25,7 @@ const MASK_TOL   = 15;  // ±15 frames window (~±0.5 s)
 
 // ---- Hand mask state ----
 let handMaskData = null;  // {frame_str: {l?: counts_str, r?: counts_str}}
+let _framewiseGaze = null; // {frames, px, py: Int16Array keyframes, n} — from framewise_info.jsonl
 const HAND_W = 1408, HAND_H = 1408;
 let _lastHandFrame = -1;   // frame-skip cache: avoid re-decoding same frame
 let _lastBoxFrame  = -2;   // frame-skip cache: avoid redoing the full bbox+hand draw
@@ -342,20 +344,67 @@ function findHowWhy(videoId, startS, endS) {
 }
 
 // ---- VQA panel ----
+const _VQA_GROUP_ORDER  = ['3d_perception', 'fine_grained', 'gaze', 'ingredient', 'nutrition', 'object_motion', 'recipe'];
+const _VQA_GROUP_LABELS = {
+  '3d_perception': '3D Perception',
+  'fine_grained':  'Fine-Grained',
+  'gaze':          'Gaze',
+  'ingredient':    'Ingredient',
+  'nutrition':     'Nutrition',
+  'object_motion': 'Object Motion',
+  'recipe':        'Recipe',
+};
+
 const VQA_CATEGORIES = {
-  gaze_gaze_estimation:         { label: 'Gaze',        color: '#0e7490', text: '#67e8f9' },
-  gaze_interaction_anticipation:{ label: 'Anticipation', color: '#92400e', text: '#fcd34d' },
-  ingredient_ingredient_weight: { label: 'Ingredient',   color: '#065f46', text: '#6ee7b7' },
-  nutrition_nutrition_change:   { label: 'Nutrition',    color: '#7f1d1d', text: '#fca5a5' },
+  // 3D perception (slate)
+  '3d_perception_fixture_interaction_counting': { label: 'Fixture Interaction Count', color: '#334155', text: '#cbd5e1', group: '3d_perception' },
+  '3d_perception_fixture_location':              { label: 'Fixture Location',          color: '#475569', text: '#e2e8f0', group: '3d_perception' },
+  '3d_perception_object_contents_retrieval':     { label: 'Object Contents',           color: '#1e293b', text: '#94a3b8', group: '3d_perception' },
+  '3d_perception_object_location':               { label: 'Object Location',           color: '#0f172a', text: '#94a3b8', group: '3d_perception' },
+  // Fine-grained (violet/indigo)
+  fine_grained_action_recognition:               { label: 'Action Recognition',        color: '#4c1d95', text: '#c4b5fd', group: 'fine_grained' },
+  fine_grained_action_localization:              { label: 'Action Localization',        color: '#1e3a8a', text: '#93c5fd', group: 'fine_grained' },
+  fine_grained_how_recognition:                  { label: 'How Recognition',           color: '#581c87', text: '#d8b4fe', group: 'fine_grained' },
+  fine_grained_why_recognition:                  { label: 'Why Recognition',           color: '#3730a3', text: '#a5b4fc', group: 'fine_grained' },
+  // Gaze (cyan / amber)
+  gaze_gaze_estimation:                          { label: 'Gaze Estimation',           color: '#0e7490', text: '#67e8f9', group: 'gaze' },
+  gaze_interaction_anticipation:                 { label: 'Interaction Anticipation',  color: '#92400e', text: '#fcd34d', group: 'gaze' },
+  // Ingredient (green)
+  ingredient_exact_ingredient_recognition:       { label: 'Exact Quantity',            color: '#14532d', text: '#86efac', group: 'ingredient' },
+  ingredient_ingredient_adding_localization:     { label: 'Adding Localization',       color: '#166534', text: '#bbf7d0', group: 'ingredient' },
+  ingredient_ingredient_recognition:             { label: 'Ingredient Recognition',    color: '#15803d', text: '#86efac', group: 'ingredient' },
+  ingredient_ingredient_retrieval:               { label: 'Ingredient Retrieval',      color: '#064e3b', text: '#6ee7b7', group: 'ingredient' },
+  ingredient_ingredient_weight:                  { label: 'Ingredient Weight',         color: '#065f46', text: '#6ee7b7', group: 'ingredient' },
+  ingredient_ingredients_order:                  { label: 'Ingredients Order',         color: '#047857', text: '#a7f3d0', group: 'ingredient' },
+  // Nutrition (red)
+  nutrition_image_nutrition_estimation:          { label: 'Image Estimation',          color: '#991b1b', text: '#fecaca', group: 'nutrition' },
+  nutrition_nutrition_change:                    { label: 'Nutrition Change',          color: '#7f1d1d', text: '#fca5a5', group: 'nutrition' },
+  nutrition_video_nutrition_estimation:          { label: 'Video Estimation',          color: '#b91c1c', text: '#fee2e2', group: 'nutrition' },
+  // Object motion (orange)
+  object_motion_object_movement_counting:        { label: 'Movement Count',            color: '#9a3412', text: '#fdba74', group: 'object_motion' },
+  object_motion_object_movement_itinerary:       { label: 'Movement Itinerary',        color: '#c2410c', text: '#fed7aa', group: 'object_motion' },
+  object_motion_stationary_object_localization:  { label: 'Stationary Localization',   color: '#ea580c', text: '#ffedd5', group: 'object_motion' },
+  // Recipe (pink/magenta)
+  recipe_following_activity_recognition:         { label: 'Activity Recognition',      color: '#9d174d', text: '#fbcfe8', group: 'recipe' },
+  recipe_multi_recipe_recognition:               { label: 'Multi-Recipe Recognition',  color: '#831843', text: '#f9a8d4', group: 'recipe' },
+  recipe_multi_step_localization:                { label: 'Multi-Step Localization',   color: '#be185d', text: '#fce7f3', group: 'recipe' },
+  recipe_prep_localization:                      { label: 'Prep Localization',         color: '#db2777', text: '#fce7f3', group: 'recipe' },
+  recipe_recipe_recognition:                     { label: 'Recipe Recognition',        color: '#a21caf', text: '#f5d0fe', group: 'recipe' },
+  recipe_rough_step_localization:                { label: 'Rough Step Localization',   color: '#86198f', text: '#f0abfc', group: 'recipe' },
+  recipe_step_localization:                      { label: 'Step Localization',         color: '#c026d3', text: '#f5d0fe', group: 'recipe' },
+  recipe_step_recognition:                       { label: 'Step Recognition',          color: '#701a75', text: '#e9d5ff', group: 'recipe' },
 };
 
 function buildVqaLookup(entries, category) {
   for (const entry of Object.values(entries)) {
-    const vid = entry.inputs?.['video 1']?.id;
-    const startS = parseHmsToS(entry.inputs?.['video 1']?.start_time || '0:0:0');
-    const endS   = parseHmsToS(entry.inputs?.['video 1']?.end_time   || '0:0:0');
-    if (!vid) continue;
-    (vqaLookup[vid] ||= []).push({
+    const inputs = entry.inputs || {};
+    // Index under video 1 (primary). For multi-video questions, indexing under all videos
+    // causes duplicates (e.g. recipe_recipe_recognition has 9 videos per entry).
+    const primary = inputs['video 1'];
+    if (!primary?.id) continue;
+    const startS = parseHmsToS(primary.start_time || '0:0:0');
+    const endS   = parseHmsToS(primary.end_time   || '0:0:0');
+    (vqaLookup[primary.id] ||= []).push({
       startS, endS, category,
       question: entry.question || '',
       choices:  entry.choices  || [],
@@ -365,14 +414,51 @@ function buildVqaLookup(entries, category) {
 }
 
 function cleanVqaText(s) {
-  return s
-    .replace(/<TIME [^>]+>/g, '[timestamp]')
-    .replace(/<BBOX [^>]+>/g, '[object]')
-    .replace(/video 1/g, 'the video');
+  if (typeof s !== 'string') return s;
+  // Localization choice pattern: "video N from <TIME T1 ...> to <TIME T2 ...>" or "From <TIME T1> to <TIME T2>"
+  s = s.replace(/(?:video \d+ from |[Ff]rom )<TIME ([0-9:.]+)[^>]*> to <TIME ([0-9:.]+)[^>]*>/g,
+    (_, t1, t2) => `<button class="vqa-time-btn" data-t="${parseHmsToS(t1)}">${t1}</button> → <button class="vqa-time-btn" data-t="${parseHmsToS(t2)}">${t2}</button>`);
+  // Paired "<TIME T1 ...> to <TIME T2 ...>" (used in recipe/object choices)
+  s = s.replace(/<TIME ([0-9:.]+)[^>]*> to <TIME ([0-9:.]+)[^>]*>/g,
+    (_, t1, t2) => `<button class="vqa-time-btn" data-t="${parseHmsToS(t1)}">${t1}</button> → <button class="vqa-time-btn" data-t="${parseHmsToS(t2)}">${t2}</button>`);
+  // Single TIME tags → clickable seek button
+  s = s.replace(/<TIME ([0-9:.]+)[^>]*>/g,
+    (_, t) => `<button class="vqa-time-btn" data-t="${parseHmsToS(t)}">${t}</button>`);
+  // BBOX → short label
+  s = s.replace(/<BBOX [^>]+>/g, '<span class="vqa-bbox">[bbox]</span>');
+  // Action tags like <hit spatula> — only letters and spaces, no attributes (must run AFTER button/span insertions to avoid false matches on HTML)
+  s = s.replace(/<([a-z][a-z ]*)>/g, '<span class="vqa-action">$1</span>');
+  // Fix article: "in the video 1" / "in video 1" → "in this video" (avoids double "the")
+  s = s.replace(/\bin (the )?video 1\b/g, 'in this video');
+  s = s.replace(/\bvideo 1\b/g, 'this video');
+  return s;
 }
 
 const vqaPanel = document.getElementById('vqa-panel');
 let _vqaSorted = [];
+const _vqaHiddenStored = localStorage.getItem('vqaHiddenCats');
+const _vqaHidden = new Set(
+  _vqaHiddenStored === null
+    ? Object.keys(VQA_CATEGORIES)
+    : JSON.parse(_vqaHiddenStored)
+);
+
+function applyVqaFilter() {
+  vqaPanel.querySelectorAll('.vqa-count-chip').forEach(chip => {
+    if (_vqaHidden.has(chip.dataset.cat)) chip.setAttribute('data-off', '');
+    else chip.removeAttribute('data-off');
+  });
+  vqaPanel.querySelectorAll('.vqa-card').forEach(card => {
+    card.classList.toggle('vqa-cat-hidden', _vqaHidden.has(card.dataset.cat));
+  });
+}
+
+function toggleVqaCategory(cat) {
+  if (_vqaHidden.has(cat)) _vqaHidden.delete(cat);
+  else _vqaHidden.add(cat);
+  localStorage.setItem('vqaHiddenCats', JSON.stringify([..._vqaHidden]));
+  applyVqaFilter();
+}
 
 function renderVqaList(videoId) {
   _vqaSorted = [];
@@ -384,17 +470,46 @@ function renderVqaList(videoId) {
   }
   _vqaSorted = [...entries].sort((a, b) => a.startS - b.startS);
 
+  const counts = {};
+  for (const e of _vqaSorted) counts[e.category] = (counts[e.category] || 0) + 1;
+
+  const grouped = {};
+  for (const [cat, n] of Object.entries(counts)) {
+    const g = (VQA_CATEGORIES[cat] || {}).group || 'other';
+    (grouped[g] ||= []).push([cat, n]);
+  }
+  _VQA_GROUP_ORDER.forEach(g => grouped[g]?.sort((a, b) => b[1] - a[1]));
+
+  let countChips = '';
+  let firstGroup = true;
+  for (const g of _VQA_GROUP_ORDER) {
+    if (!grouped[g]?.length) continue;
+    countChips += `<div class="vqa-group-row"><span class="vqa-group-hdr">${_VQA_GROUP_LABELS[g]}</span><div class="vqa-group-chips">`;
+    firstGroup = false;
+    countChips += grouped[g].map(([cat, n]) => {
+      const c = VQA_CATEGORIES[cat] || { label: cat, color: '#374151', text: '#9ca3af' };
+      return `<span class="vqa-count-chip" data-cat="${cat}" title="Click to toggle" style="background:${c.color};color:${c.text}">${c.label}: ${n}</span>`;
+    }).join('') + `</div></div>`;
+  }
+
   const collapsed = !!_secState['vqa'];
   const cards = _vqaSorted.map((e, i) => {
     const cat = VQA_CATEGORIES[e.category] || { label: e.category, color: '#374151', text: '#9ca3af' };
-    const dur = (e.endS - e.startS).toFixed(2);
-    const choicesHtml = e.choices.map((c, j) =>
-      `<div class="vqa-choice${j === e.correct ? ' correct' : ''}">${j === e.correct ? '✓ ' : `<span class="vqa-idx">${String.fromCharCode(65+j)}</span> `}${c}</div>`
-    ).join('');
-    return `<div class="vqa-card" data-idx="${i}" data-start="${e.startS}" data-end="${e.endS}">
+    const dur = (e.endS - e.startS).toFixed(3);
+    const noTime = e.startS === 0 && e.endS === 0;
+    const windowHtml = noTime
+      ? '<span class="vqa-window vqa-fullvideo">full video</span>'
+      : `<span class="vqa-window">${fmtTime(e.startS, true)} → ${fmtTime(e.endS, true)} <span class="vqa-dur">+${dur}s</span></span>`;
+    const choicesHtml = e.choices.map((c, j) => {
+      const text = Array.isArray(c)
+        ? c.map((x, k) => `<span class="vqa-ord-item">${k+1}. ${cleanVqaText(x)}</span>`).join('')
+        : cleanVqaText(c);
+      return `<div class="vqa-choice${j === e.correct ? ' correct' : ''}">${j === e.correct ? '✓ ' : `<span class="vqa-idx">${String.fromCharCode(65+j)}</span> `}${text}</div>`;
+    }).join('');
+    return `<div class="vqa-card${noTime ? ' vqa-fullvideo-card' : ''}" data-idx="${i}" data-cat="${e.category}" data-start="${e.startS}" data-end="${e.endS}">
       <div class="vqa-card-meta">
         <span class="vqa-badge" style="background:${cat.color};color:${cat.text}">${cat.label}</span>
-        <span class="vqa-window">${fmtTime(e.startS)} → ${fmtTime(e.endS)} <span class="vqa-dur">${dur}s</span></span>
+        ${windowHtml}
       </div>
       <div class="vqa-q">${cleanVqaText(e.question)}</div>
       <div class="vqa-choices">${choicesHtml}</div>
@@ -403,10 +518,17 @@ function renderVqaList(videoId) {
 
   vqaPanel.innerHTML =
     `<div class="vqa-header">VQA · ${_vqaSorted.length} question${_vqaSorted.length > 1 ? 's' : ''}<button class="sec-toggle" data-sec="vqa">${collapsed ? '▸' : '▾'}</button></div>` +
-    `<div class="sec-body">${cards}</div>`;
+    `<div class="sec-body"><div class="vqa-counts">${countChips}</div>${cards}</div>`;
   vqaPanel.classList.add('has-questions');
   vqaPanel.classList.toggle('sec-collapsed', collapsed);
   vqaPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('vqa'));
+
+  vqaPanel.querySelectorAll('.vqa-count-chip').forEach(chip => {
+    chip.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      toggleVqaCategory(chip.dataset.cat);
+    });
+  });
 
   vqaPanel.querySelectorAll('.vqa-card').forEach(card => {
     card.addEventListener('click', () => {
@@ -414,6 +536,16 @@ function renderVqaList(videoId) {
       if (vid.duration) vid.currentTime = s;
     });
   });
+
+  vqaPanel.querySelectorAll('.vqa-time-btn').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const t = parseFloat(btn.dataset.t);
+      if (!isNaN(t) && vid.duration) vid.currentTime = t;
+    });
+  });
+
+  applyVqaFilter();
 }
 
 function renderVqaPanel(t) {
@@ -421,9 +553,10 @@ function renderVqaPanel(t) {
   let activeCard = null;
   vqaPanel.querySelectorAll('.vqa-card').forEach((card, i) => {
     const e = _vqaSorted[i];
-    const isActive = !!e && e.startS <= t && e.endS >= t;
+    const noTime = e.startS === 0 && e.endS === 0;
+    const isActive = !noTime && e.startS <= t && e.endS >= t;
     card.classList.toggle('vqa-active', isActive);
-    if (isActive) activeCard = card;
+    if (isActive && !_vqaHidden.has(e.category)) activeCard = card;
   });
   if (activeCard) activeCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
@@ -558,6 +691,35 @@ async function loadHandMasks(videoId) {
   } catch (e) {
     handMaskData = null;
   }
+}
+
+// Loads per-frame gaze pixel coords from HD-EPIC Intermediate Data.
+// Preferred over CPF projection — no calibration math, no aspect-ratio issues.
+// Falls back gracefully (leaves _framewiseGaze null) if file not found.
+async function loadFramewiseGaze(videoId) {
+  _framewiseGaze = null;
+  const _gazeBtn = document.getElementById('gaze-btn');
+  if (_gazeBtn) _gazeBtn.style.display = 'none';
+  if (!videoId) return;
+  const participant = videoId.split('-')[0];
+  const url = `../HD-EPIC%20Intermediate%20Data/${participant}/${encodeURIComponent(videoId)}/framewise_info.jsonl`;
+  let res;
+  try { res = await fetch(url); } catch { return; }
+  if (!res.ok) return;
+  try {
+    const buf = await res.arrayBuffer();
+    const parsed = await parseInWorker(buf, 'jsonl_gaze');
+    _framewiseGaze = {
+      frames: new Int16Array(parsed.frames),  // frame index at each gaze keyframe
+      px:     new Int16Array(parsed.px),
+      py:     new Int16Array(parsed.py),
+      n:      parsed.n,
+    };
+    if (_gazeBtn) {
+      _gazeBtn.style.display = '';
+      _gazeBtn.classList.toggle('active', _gazeDotEnabled);
+    }
+  } catch { /* silently fall back to CPF projection */ }
 }
 
 function applyVideoFilter() {
@@ -1167,6 +1329,7 @@ document.getElementById('video-input').addEventListener('change', e => {
   vid.style.display = 'block';
   applyVideoFilter();
   initSlamForVideo(currentVideoId);
+  loadFramewiseGaze(currentVideoId);
 });
 
 // Drag & drop on video area
@@ -1186,6 +1349,7 @@ videoWrap.addEventListener('drop', e => {
     vid.style.display = 'block';
     applyVideoFilter();
     initSlamForVideo(currentVideoId);
+    loadFramewiseGaze(currentVideoId);
   }
 });
 
@@ -1278,7 +1442,7 @@ function buildTimeline() {
 }
 
 vid.addEventListener('loadedmetadata', () => {
-  tEnd.textContent = fmtTime(vid.duration);
+  tEnd.textContent = fmtTime(vid.duration, true);
   syncBboxCanvas();
   buildTimeline();
 });
@@ -1288,9 +1452,12 @@ vid.addEventListener('timeupdate', () => {
   const pct = (t / dur) * 100;
   cursor.style.left = pct + '%';
   progress.style.width = pct + '%';
-  tCur.textContent = fmtTime(t);
   renderAudioHud(t);
-  if (!_maskRafId) renderMaskBoxes(t);  // only when rAF loop is not running (paused/seek)
+  if (!_maskRafId) {
+    tCur.textContent = fmtTime(t, true);
+    timeMsOverlay.textContent = fmtTime(t, true);
+    renderMaskBoxes(t);  // only when rAF loop is not running (paused/seek)
+  }
   updateStepContext(t);
   renderNutritionTracker(t);
   renderVqaPanel(t);
@@ -1309,10 +1476,130 @@ vid.addEventListener('timeupdate', () => {
 // main-thread runs = less paint invalidation = smoother video.
 const _HAS_VFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 
+// Returns the bounding rect of the actual image inside the <video> element,
+// accounting for object-fit:contain letterbox/pillarbox bands.
+function _getVideoImageRect() {
+  const vRect = vid.getBoundingClientRect();
+  const wRect = videoWrap.getBoundingClientRect();
+  const baseL = vRect.left - wRect.left;
+  const baseT = vRect.top  - wRect.top;
+  if (!vid.videoWidth || !vid.videoHeight) {
+    return { left: baseL, top: baseT, width: vRect.width, height: vRect.height };
+  }
+  const scale = Math.min(vRect.width / vid.videoWidth, vRect.height / vid.videoHeight);
+  const imgW  = vid.videoWidth  * scale;
+  const imgH  = vid.videoHeight * scale;
+  return {
+    left:   baseL + (vRect.width  - imgW) / 2,
+    top:    baseT + (vRect.height - imgH) / 2,
+    width:  imgW,
+    height: imgH,
+  };
+}
+
+// 2D gaze dot — projects CPF gaze direction onto the Aria RGB video frame.
+//
+// Calibration data from projectaria_tools (VRS P01-20240204-095114):
+//   R_CAM_CPF = R_device_camera.T * R_device_cpf
+//   fx = 607.21 px (fisheye equidistant model — FISHEYE624)
+//   principal point: cx=713.21, cy=704.35  in 1408×1408 raw sensor
+//
+// The Aria RGB sensor is mounted rotated 90° CW in the glasses frame.
+// Verified via rgb.project() ground truth: yaw+ (left) → raw v↑, pitch+ (up) → raw u↓.
+// Display NDC from raw (u, v):  ndcX = 0.5 - v/W,  ndcY = u/W - 0.5
+const _gazeDot = document.getElementById('gaze-dot');
+const _R_CAM_CPF = [
+  [ 0.0114, -0.9912, -0.1317],
+  [ 0.9997,  0.0094,  0.0173],
+  [-0.0160, -0.1319,  0.9912],
+];
+const _GAZE_FX = 607.21;
+const _GAZE_CX = 713.21;
+const _GAZE_CY = 704.35;
+const _GAZE_W  = 1408;
+const GAZE_ENABLED_KEY = 'hdepic.gazeEnabled';
+let _gazeDotEnabled = localStorage.getItem(GAZE_ENABLED_KEY) !== '0';
+
+function _updateGazeDot(tVideoS) {
+  if (!_gazeDot) return;
+  if (!_gazeDotEnabled || !vid.videoWidth) {
+    if (!_gazeDot.hidden) _gazeDot.hidden = true;
+    return;
+  }
+
+  // ── NEW PATH: framewise keyframe lookup + linear interpolation ───────────
+  // Gaze tracker fires ~5 Hz; we interpolate between keyframes to get smooth
+  // 30 fps motion instead of a dot that teleports every ~6 frames.
+  if (_framewiseGaze) {
+    const fi = Math.round(tVideoS * 30);
+    const fw = _framewiseGaze;
+    // Binary search: largest i such that fw.frames[i] <= fi
+    let lo = 0, hi = fw.n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (fw.frames[mid] <= fi) lo = mid; else hi = mid - 1;
+    }
+    if (fi < fw.frames[0]) { if (!_gazeDot.hidden) _gazeDot.hidden = true; return; }
+    let px, py;
+    if (lo < fw.n - 1) {
+      const t = (fi - fw.frames[lo]) / (fw.frames[lo + 1] - fw.frames[lo]);
+      px = fw.px[lo] + t * (fw.px[lo + 1] - fw.px[lo]);
+      py = fw.py[lo] + t * (fw.py[lo + 1] - fw.py[lo]);
+    } else {
+      px = fw.px[lo]; py = fw.py[lo];
+    }
+    const r = _getVideoImageRect();
+    const dotX = r.left + (px / 1408) * r.width;
+    const dotY = r.top  + (py / 1408) * r.height;
+    _gazeDot.style.transform = `translate(${dotX.toFixed(1)}px, ${dotY.toFixed(1)}px)`;
+    if (_gazeDot.hidden) _gazeDot.hidden = false;
+    return;
+  }
+
+  // ── OLD PATH: CPF yaw/pitch → fisheye projection (fallback if no framewise data) ──
+  if (!currentSlam || !currentSlam.getGazeAtTime) {
+    if (!_gazeDot.hidden) _gazeDot.hidden = true;
+    return;
+  }
+  const g = currentSlam.getGazeAtTime(tVideoS);
+  if (!g) { if (!_gazeDot.hidden) _gazeDot.hidden = true; return; }
+
+  // d_cpf: gaze direction in CPF (+X left, +Y up, +Z forward)
+  const cp = Math.cos(g.pitch), sp = Math.sin(g.pitch);
+  const cyw = Math.cos(g.yaw),  syw = Math.sin(g.yaw);
+  const dx = syw * cp, dy = sp, dz = cyw * cp;
+
+  // d_cam = R_CAM_CPF * d_cpf
+  const cx = _R_CAM_CPF[0][0]*dx + _R_CAM_CPF[0][1]*dy + _R_CAM_CPF[0][2]*dz;
+  const cy = _R_CAM_CPF[1][0]*dx + _R_CAM_CPF[1][1]*dy + _R_CAM_CPF[1][2]*dz;
+  const cz = _R_CAM_CPF[2][0]*dx + _R_CAM_CPF[2][1]*dy + _R_CAM_CPF[2][2]*dz;
+  if (cz <= 0) { if (!_gazeDot.hidden) _gazeDot.hidden = true; return; }
+
+  // Equidistant fisheye: r_px = f * atan2(r_xy, cz)
+  const r_xy = Math.sqrt(cx*cx + cy*cy);
+  const r_px = _GAZE_FX * Math.atan2(r_xy, cz);
+  const u = _GAZE_CX + (r_xy > 1e-9 ? r_px * cx / r_xy : 0);
+  const v = _GAZE_CY + (r_xy > 1e-9 ? r_px * cy / r_xy : 0);
+
+  // 90° CW sensor rotation → display NDC
+  const ndcX = 0.5 - v / _GAZE_W;
+  const ndcY = u / _GAZE_W - 0.5;
+
+  const vRect = vid.getBoundingClientRect();
+  const wRect = videoWrap.getBoundingClientRect();
+  const dotX = (vRect.left - wRect.left) + vRect.width  * (0.5 + ndcX);
+  const dotY = (vRect.top  - wRect.top ) + vRect.height * (0.5 + ndcY);
+  _gazeDot.style.transform = `translate(${dotX.toFixed(1)}px, ${dotY.toFixed(1)}px)`;
+  if (_gazeDot.hidden) _gazeDot.hidden = false;
+}
+
 function _frameTick(_now, meta) {
   const t = meta ? meta.mediaTime : vid.currentTime;
   renderMaskBoxes(t);
   if (currentSlam) currentSlam.setTime(t);
+  _updateGazeDot(t);
+  tCur.textContent = fmtTime(t, true);
+  timeMsOverlay.textContent = fmtTime(t, true);
   _maskRafId = _HAS_VFC
     ? vid.requestVideoFrameCallback(_frameTick)
     : requestAnimationFrame(_frameTick);
@@ -1431,6 +1718,86 @@ searchInput.addEventListener('input', () => {
 });
 
 window.addEventListener('resize', () => { updateCaptionSpacers(); syncBboxCanvas(); });
+
+// ---- Resize handles ----
+// Drag handles between panels. Each handle adjusts one neighbor via a CSS
+// variable (--rsz-h or --rsz-w) on the target panel, so the collapse CSS
+// rules that reset `flex: 0 0 auto` still work. Persisted to localStorage.
+function makeResizable({ handle, target, dir, min = 60, sign = 1, key, onResize }) {
+  if (!handle || !target) return;
+  const cssVar = dir === 'h' ? '--rsz-w' : '--rsz-h';
+  const sizeProp = dir === 'h' ? 'offsetWidth' : 'offsetHeight';
+
+  if (key) {
+    const saved = localStorage.getItem(key);
+    if (saved && !isNaN(parseFloat(saved))) {
+      target.style.setProperty(cssVar, parseFloat(saved) + 'px');
+    }
+  }
+
+  let startPos = 0, startSize = 0;
+  function onMove(e) {
+    const pos = dir === 'h' ? e.clientX : e.clientY;
+    const delta = (pos - startPos) * sign;
+    const newSize = Math.max(min, startSize + delta);
+    target.style.setProperty(cssVar, newSize + 'px');
+    if (key) localStorage.setItem(key, String(newSize));
+    if (onResize) onResize();
+  }
+  function onUp() {
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    handle.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  }
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    startPos = dir === 'h' ? e.clientX : e.clientY;
+    startSize = target[sizeProp];
+    document.body.style.cursor = dir === 'h' ? 'col-resize' : 'row-resize';
+    document.body.style.userSelect = 'none';
+    handle.classList.add('dragging');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+(function wireResizers() {
+  const slamResize = () => { if (currentSlam) currentSlam.resize(); syncBboxCanvas(); };
+  // A: video|annot horizontal — drag right grows video-panel
+  makeResizable({
+    handle: document.getElementById('rsz-video-annot'),
+    target: document.getElementById('video-panel'),
+    dir: 'h', sign: 1, min: 240, key: 'rsz_video_annot',
+    onResize: slamResize,
+  });
+  // B: video-wrap|slam-host vertical — drag DOWN shrinks slam-host
+  makeResizable({
+    handle: document.getElementById('rsz-video-slam'),
+    target: document.getElementById('slam-host'),
+    dir: 'v', sign: -1, min: 80, key: 'rsz_video_slam',
+    onResize: slamResize,
+  });
+  // C: narrations|recipe — drag DOWN shrinks recipe (grows narrations)
+  makeResizable({
+    handle: document.getElementById('rsz-nar-rec'),
+    target: document.getElementById('recipe-overview'),
+    dir: 'v', sign: -1, min: 40, key: 'rsz_nar_rec',
+  });
+  // D: recipe|nutrition — drag DOWN shrinks nutrition
+  makeResizable({
+    handle: document.getElementById('rsz-rec-nut'),
+    target: document.getElementById('nutrition-panel'),
+    dir: 'v', sign: -1, min: 40, key: 'rsz_rec_nut',
+  });
+  // E: nutrition|vqa — drag DOWN shrinks vqa
+  makeResizable({
+    handle: document.getElementById('rsz-nut-vqa'),
+    target: document.getElementById('vqa-panel'),
+    dir: 'v', sign: -1, min: 40, key: 'rsz_nut_vqa',
+  });
+})();
 
 // ---- Auto-load defaults ----
 // These paths are relative to the server root (one level up from viewer/).
@@ -1568,12 +1935,7 @@ async function autoLoadDefaults() {
   }
 
   try {
-    const vqaFiles = [
-      ['gaze_gaze_estimation',          '../vqa-benchmark/gaze_gaze_estimation.json'],
-      ['gaze_interaction_anticipation',  '../vqa-benchmark/gaze_interaction_anticipation.json'],
-      ['ingredient_ingredient_weight',   '../vqa-benchmark/ingredient_ingredient_weight.json'],
-      ['nutrition_nutrition_change',     '../vqa-benchmark/nutrition_nutrition_change.json'],
-    ];
+    const vqaFiles = Object.keys(VQA_CATEGORIES).map(cat => [cat, `../vqa-benchmark/${cat}.json`]);
     await Promise.allSettled(vqaFiles.map(async ([cat, path]) => {
       const res = await fetch(path);
       if (!res.ok) return;
@@ -1597,11 +1959,62 @@ let _slamModulePromise = null;
 const _slamHost        = document.getElementById('slam-host');
 const _slamPlaceholder = document.getElementById('slam-placeholder');
 const _slamToggleBtn   = document.getElementById('slam-toggle');
+const _slamLayersPanel = document.getElementById('slam-layers');
 
 const SLAM_ENABLED_KEY = 'hdepic.slamEnabled';
 const slamInitiallyOn  = localStorage.getItem(SLAM_ENABLED_KEY) !== '0';
 document.body.classList.toggle('no-slam', !slamInitiallyOn);
 _slamToggleBtn.classList.toggle('active', slamInitiallyOn);
+
+// Gaze-dot toggle button — shown only when framewise_info.jsonl is loaded.
+// Controls _gazeDotEnabled independently of the SLAM 3D ray (#L-gaze-ray).
+{
+  const _gazeBtn = document.getElementById('gaze-btn');
+  if (_gazeBtn) {
+    _gazeBtn.addEventListener('click', () => {
+      _gazeDotEnabled = !_gazeDotEnabled;
+      localStorage.setItem(GAZE_ENABLED_KEY, _gazeDotEnabled ? '1' : '0');
+      _gazeBtn.classList.toggle('active', _gazeDotEnabled);
+    });
+  }
+}
+
+// Maps DOM checkbox ids in #slam-layers to module layer names. mov-persist is
+// a special case wired to setMovementsPersistent instead of setLayerVisible.
+const _SLAM_LAYER_MAP = [
+  ['L-kitchen',   'kitchen'],
+  ['L-traj',      'trajectory'],
+  ['L-gaze',      'gaze'],
+  ['L-gaze-ray',  'gazeRay'],
+  ['L-head',      'head'],
+  ['L-objects',   'objects'],
+  ['L-movements', 'movements'],
+  ['L-grid',      'grid'],
+];
+
+function _applySlamLayersToCurrent() {
+  if (!currentSlam) return;
+  for (const [id, layer] of _SLAM_LAYER_MAP) {
+    const cb = document.getElementById(id);
+    if (cb) currentSlam.setLayerVisible(layer, cb.checked);
+  }
+  const persist = document.getElementById('L-mov-persist');
+  if (persist) currentSlam.setMovementsPersistent(persist.checked);
+  // #L-gaze-ray now controls only the 3D ray in slam-viewer.js; the 2D dot
+  // is controlled independently by #gaze-btn in the topbar.
+}
+
+// Wire the change events once at boot. They no-op when no slam is mounted yet.
+for (const [id, layer] of _SLAM_LAYER_MAP) {
+  const cb = document.getElementById(id);
+  if (cb) cb.addEventListener('change', e => {
+    if (currentSlam) currentSlam.setLayerVisible(layer, e.target.checked);
+  });
+}
+{
+  const persist = document.getElementById('L-mov-persist');
+  if (persist) persist.addEventListener('change', e => currentSlam && currentSlam.setMovementsPersistent(e.target.checked));
+}
 
 function loadSlamModule() {
   if (!_slamModulePromise) {
@@ -1615,10 +2028,13 @@ function showSlamPlaceholder(msg) {
     _slamPlaceholder.textContent = msg;
     _slamPlaceholder.style.display = '';
   }
+  if (_slamLayersPanel) _slamLayersPanel.hidden = true;
+  if (_gazeDot) _gazeDot.hidden = true;
 }
 
 function hideSlamPlaceholder() {
   if (_slamPlaceholder) _slamPlaceholder.style.display = 'none';
+  if (_slamLayersPanel) _slamLayersPanel.hidden = false;
 }
 
 async function initSlamForVideo(videoId) {
@@ -1634,7 +2050,11 @@ async function initSlamForVideo(videoId) {
   showSlamPlaceholder(`Loading 3D scene for ${videoId}…`);
 
   // Probe data file first so 404 doesn't leak a half-mounted scene.
-  const dataUrl = `../output/slam_${videoId}.json`;
+  // Cache-buster on the JSON: SLAM exports are regenerated frequently during
+  // development, and Firefox/Chromium happily serve stale copies even after a
+  // hard reload of the HTML — leading to "module ignores new fields" bugs.
+  // The browser will still cache the GLB (which we want, it's big).
+  const dataUrl = `../output/slam_${videoId}.json?v=${Date.now()}`;
   let dataRes;
   try {
     dataRes = await fetch(dataUrl);
@@ -1678,6 +2098,7 @@ async function initSlamForVideo(videoId) {
   }
   currentSlam = slam;
   hideSlamPlaceholder();
+  _applySlamLayersToCurrent();  // reapply checkbox state to the freshly mounted scene
   currentSlam.setTime(vid.currentTime || 0);
 }
 
