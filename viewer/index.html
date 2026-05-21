@@ -23,6 +23,7 @@
   <span id="video-name">no video loaded</span>
   <a id="yt-btn" class="file-btn" href="#" target="_blank" rel="noopener" style="display:none">&#9654; YouTube</a>
   <button id="slam-toggle" class="file-btn" title="Toggle 3D scene">3D</button>
+  <button id="gaze-btn" class="file-btn" style="display:none" title="Toggle 2D gaze dot on video">&#128065; Gaze</button>
   <button class="file-btn" onclick="document.getElementById('annotations-input').click()">Load annotations (.pkl/.csv)</button>
   <input type="file" id="annotations-input" accept=".pkl,.pickle,.csv,application/octet-stream,text/csv" style="display:none">
   <span id="csv-name">no annotations loaded</span>
@@ -45,10 +46,24 @@
       </div>
       <video id="vid" controls></video>
       <canvas id="bbox-canvas"></canvas>
+      <div id="gaze-dot" hidden></div>
       <div id="audio-hud"></div>
+      <div id="time-ms-overlay"></div>
     </div>
+    <div class="resize-handle h-v" id="rsz-video-slam" title="Drag to resize video / 3D"></div>
     <div id="slam-host">
       <div id="slam-placeholder">Load a video to see the SLAM 3D scene</div>
+      <div id="slam-layers" hidden>
+        <label><input type="checkbox" id="L-kitchen"    checked> kitchen</label>
+        <label><input type="checkbox" id="L-traj"       checked> trajectory</label>
+        <label><input type="checkbox" id="L-gaze"       checked> gaze priming</label>
+        <label><input type="checkbox" id="L-gaze-ray"   checked> gaze ray</label>
+        <label><input type="checkbox" id="L-head"       checked> camera head</label>
+        <label><input type="checkbox" id="L-objects"    checked> objects</label>
+        <label><input type="checkbox" id="L-movements"  checked> movements</label>
+        <label class="sub"><input type="checkbox" id="L-mov-persist"> all at once</label>
+        <label><input type="checkbox" id="L-grid"       checked> grid</label>
+      </div>
     </div>
     <div id="timeline-wrap">
       <div id="timeline-track">
@@ -70,6 +85,8 @@
     </div>
   </div>
 
+  <div class="resize-handle h-h" id="rsz-video-annot" title="Drag to resize video / annotations"></div>
+
   <div id="annot-panel">
     <div id="annot-header">Narrations <button class="sec-toggle" data-sec="narrations" title="Collapse/expand">▾</button></div>
     <div id="narrations-body">
@@ -79,8 +96,11 @@
       </div>
       <div id="annot-list"></div>
     </div>
+    <div class="resize-handle h-v" id="rsz-nar-rec" title="Drag to resize Recipe"></div>
     <div id="recipe-overview"></div>
+    <div class="resize-handle h-v" id="rsz-rec-nut" title="Drag to resize Nutrition"></div>
     <div id="nutrition-panel"></div>
+    <div class="resize-handle h-v" id="rsz-nut-vqa" title="Drag to resize VQA"></div>
     <div id="vqa-panel"></div>
   </div>
 </div>
