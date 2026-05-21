@@ -173,6 +173,7 @@ ___SLAM_VIEWER_CSS___
     <label class="layer-toggle"><input type="checkbox" id="tog-kitchen" checked> Kitchen model</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-traj"    checked> Trajectory</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-gaze"    checked> Gaze priming</label>
+    <label class="layer-toggle"><input type="checkbox" id="tog-gaze-ray" checked> Gaze ray (per-frame)</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-head"    checked> Camera head</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-objects" checked> Objects</label>
     <label class="layer-toggle"><input type="checkbox" id="tog-movements" checked> Movements</label>
@@ -304,6 +305,7 @@ const wireLayer = (id, layer) => {
 wireLayer('tog-kitchen',   'kitchen');
 wireLayer('tog-traj',      'trajectory');
 wireLayer('tog-gaze',      'gaze');
+wireLayer('tog-gaze-ray',  'gazeRay');
 wireLayer('tog-head',      'head');
 wireLayer('tog-objects',   'objects');
 wireLayer('tog-movements', 'movements');
@@ -332,7 +334,7 @@ requestAnimationFrame(tick);
 
 # ── Python helpers ─────────────────────────────────────────────────────────────
 
-def load_trajectory(csv_path: Path, subsample: int = 200) -> dict:
+def load_trajectory(csv_path: Path, subsample: int = 10) -> dict:
     """Read SLAM trajectory CSV. subsample=N keeps 1 row every N rows."""
     t, x, y, z, qx, qy, qz, qw = [], [], [], [], [], [], [], []
     with open(csv_path, newline='') as f:
@@ -503,6 +505,43 @@ def _r(arr, d=4):
     return [round(v, d) for v in arr]
 
 
+def load_eye_gaze(video_id: str) -> dict | None:
+    """Read per-frame eye gaze samples from `general_eye_gaze.csv` on the HPC.
+
+    The CSV is sampled at 10 Hz (~4000 rows for a ~400s session) and contains
+    binocular yaw + pitch in CPF (Central Pupil Frame), plus a depth_m estimate.
+    We emit a cyclopean-eye approximation `(yaw = (left+right)/2, pitch, depth)`
+    indexed by `tracking_timestamp_us` (same VRS clock as the SLAM trajectory),
+    so the JS module can binary-search by time and project a ray from the head.
+    """
+    if not video_id:
+        return None
+    participant = video_id.split('-')[0]
+    csv_path = (HPC_ROOT / 'SLAM-and-Gaze' / participant
+                / 'GAZE_HAND' / f'mps_{video_id}_vrs' / 'eye_gaze'
+                / 'general_eye_gaze.csv')
+    if not csv_path.exists():
+        return None
+    t, yaw, pitch, depth = [], [], [], []
+    with open(csv_path, newline='') as f:
+        for row in csv.DictReader(f):
+            try:
+                ly = float(row['left_yaw_rads_cpf'])
+                ry = float(row['right_yaw_rads_cpf'])
+                p  = float(row['pitch_rads_cpf'])
+                d  = float(row.get('depth_m') or 0)
+                t.append(int(row['tracking_timestamp_us']))
+                yaw.append((ly + ry) / 2)
+                pitch.append(p)
+                depth.append(d)
+            except (ValueError, KeyError):
+                continue
+    if not t:
+        return None
+    print(f"[eye_gaze] {len(t)} samples for {video_id} ({(t[-1]-t[0])/1e6:.1f}s)")
+    return dict(t=t, yaw=yaw, pitch=pitch, depth=depth)
+
+
 def load_video_t0_vrs_us(video_id: str) -> int | None:
     """Return the VRS device time (in microseconds) of the first MP4 frame.
 
@@ -532,7 +571,8 @@ def load_video_t0_vrs_us(video_id: str) -> int | None:
 def build_data_json(participant: str, video_id: str, traj: dict,
                     gaze: dict | None, objects: list[dict],
                     movements: list[dict], glb_name: str | None = None,
-                    video_t0_vrs_us: int | None = None) -> str:
+                    video_t0_vrs_us: int | None = None,
+                    eye_gaze: dict | None = None) -> str:
     blob = {
         "participant": participant,
         "video_id":    video_id,
@@ -557,6 +597,13 @@ def build_data_json(participant: str, video_id: str, traj: dict,
         blob["objects"] = objects
     if movements:
         blob["movements"] = movements
+    if eye_gaze:
+        blob["eye_gaze"] = {
+            "t":     eye_gaze["t"],
+            "yaw":   _r(eye_gaze["yaw"], 4),
+            "pitch": _r(eye_gaze["pitch"], 4),
+            "depth": _r(eye_gaze["depth"], 3),
+        }
     return json.dumps(blob, separators=(',', ':'))
 
 
@@ -697,10 +744,12 @@ def run_batch_export(args):
             print(f"[align] video_t0 = {video_t0/1e6:.3f}s VRS  →  SLAM T0 ahead by {offset_s:+.3f}s")
         else:
             print(f"[align] no mp4_to_vrs CSV — video↔SLAM alignment will fall back to legacy")
+        eye_gaze = load_eye_gaze(video_id)
 
         data_json = build_data_json(participant, video_id, traj, gaze, objects, movements,
                                     glb_name=glb_in_out.name,
-                                    video_t0_vrs_us=video_t0)
+                                    video_t0_vrs_us=video_t0,
+                                    eye_gaze=eye_gaze)
         json_path = out_dir / f"slam_{video_id}.json"
         json_path.write_text(data_json, encoding='utf-8')
         print(f"[ok] {json_path.name} ({json_path.stat().st_size // 1024} KB)")
@@ -729,8 +778,8 @@ def main():
     ap.add_argument('--slam',  metavar='FILE', help='closed_loop_trajectory.csv')
     ap.add_argument('--gaze',  metavar='FILE',
                     help='priming_info.json (default: eye-gaze-priming/priming_info.json)')
-    ap.add_argument('--subsample', type=int, default=200, metavar='N',
-                    help='Keep 1 trajectory row every N (default: 200 ≈ 2000 pts/session)')
+    ap.add_argument('--subsample', type=int, default=10, metavar='N',
+                    help='Keep 1 trajectory row every N (default: 10 ≈ 100 Hz / 40K pts per session)')
     ap.add_argument('--out', default='output', metavar='DIR',
                     help='Output directory for GLB + HTML (default: ./output)')
     ap.add_argument('--force', action='store_true', help='Re-export GLB even if it exists')
@@ -834,10 +883,12 @@ def main():
     if video_t0 is not None:
         offset_s = (traj["t"][0] - video_t0) / 1e6
         print(f"[align] video_t0 = {video_t0/1e6:.3f}s VRS  →  SLAM T0 ahead by {offset_s:+.3f}s")
+    eye_gaze = load_eye_gaze(video_id) if video_id else None
 
     data_json = build_data_json(participant or '?', video_id or '', traj, gaze, objects, movements,
                                 glb_name=glb_in_out.name,
-                                video_t0_vrs_us=video_t0)
+                                video_t0_vrs_us=video_t0,
+                                eye_gaze=eye_gaze)
     size_kb = len(data_json.encode()) // 1024
     print(f"[data] JSON blob: {size_kb} KB")
 
