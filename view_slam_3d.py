@@ -505,41 +505,43 @@ def _r(arr, d=4):
     return [round(v, d) for v in arr]
 
 
-def load_eye_gaze(video_id: str) -> dict | None:
-    """Read per-frame eye gaze samples from `general_eye_gaze.csv` on the HPC.
+def load_gaze_world(video_id: str) -> dict | None:
+    """Read per-frame gaze world-space directions from framewise_info.jsonl (local copy).
 
-    The CSV is sampled at 10 Hz (~4000 rows for a ~400s session) and contains
-    binocular yaw + pitch in CPF (Central Pupil Frame), plus a depth_m estimate.
-    We emit a cyclopean-eye approximation `(yaw = (left+right)/2, pitch, depth)`
-    indexed by `tracking_timestamp_us` (same VRS clock as the SLAM trajectory),
-    so the JS module can binary-search by time and project a ray from the head.
+    Deduplicates on gaze_timestamp_ns (~5.1 Hz effective gaze rate, same as the
+    2D dot worker). Returns {t_us, dx, dy, dz} — tracking_timestamp_ns/1000 and
+    the unit gaze direction in SLAM world space (Z-up), ready for binary-search
+    by SLAM time and direct s2t() transform in slam-viewer.js (no calibration matrix).
     """
     if not video_id:
         return None
     participant = video_id.split('-')[0]
-    csv_path = (HPC_ROOT / 'SLAM-and-Gaze' / participant
-                / 'GAZE_HAND' / f'mps_{video_id}_vrs' / 'eye_gaze'
-                / 'general_eye_gaze.csv')
-    if not csv_path.exists():
+    jsonl_path = (Path(__file__).parent / 'HD-EPIC Intermediate Data'
+                  / participant / video_id / 'framewise_info.jsonl')
+    if not jsonl_path.exists():
         return None
-    t, yaw, pitch, depth = [], [], [], []
-    with open(csv_path, newline='') as f:
-        for row in csv.DictReader(f):
-            try:
-                ly = float(row['left_yaw_rads_cpf'])
-                ry = float(row['right_yaw_rads_cpf'])
-                p  = float(row['pitch_rads_cpf'])
-                d  = float(row.get('depth_m') or 0)
-                t.append(int(row['tracking_timestamp_us']))
-                yaw.append((ly + ry) / 2)
-                pitch.append(p)
-                depth.append(d)
-            except (ValueError, KeyError):
+    t_us, dx, dy, dz = [], [], [], []
+    prev_gaze_ts = None
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
                 continue
-    if not t:
+            d = json.loads(line)
+            gdir   = d.get('gaze_direction_in_world')
+            ts_ns  = d.get('tracking_timestamp_ns')
+            gts    = d.get('gaze_timestamp_ns')
+            if gdir is None or ts_ns is None:
+                continue
+            if gts == prev_gaze_ts:
+                continue
+            prev_gaze_ts = gts
+            t_us.append(ts_ns // 1000)
+            dx.append(gdir[0]); dy.append(gdir[1]); dz.append(gdir[2])
+    if not t_us:
         return None
-    print(f"[eye_gaze] {len(t)} samples for {video_id} ({(t[-1]-t[0])/1e6:.1f}s)")
-    return dict(t=t, yaw=yaw, pitch=pitch, depth=depth)
+    print(f"[gaze_world] {len(t_us)} keyframes for {video_id} ({(t_us[-1]-t_us[0])/1e6:.1f}s)")
+    return dict(t_us=t_us, dx=dx, dy=dy, dz=dz)
 
 
 def load_video_t0_vrs_us(video_id: str) -> int | None:
@@ -572,7 +574,7 @@ def build_data_json(participant: str, video_id: str, traj: dict,
                     gaze: dict | None, objects: list[dict],
                     movements: list[dict], glb_name: str | None = None,
                     video_t0_vrs_us: int | None = None,
-                    eye_gaze: dict | None = None) -> str:
+                    gaze_world: dict | None = None) -> str:
     blob = {
         "participant": participant,
         "video_id":    video_id,
@@ -597,12 +599,12 @@ def build_data_json(participant: str, video_id: str, traj: dict,
         blob["objects"] = objects
     if movements:
         blob["movements"] = movements
-    if eye_gaze:
-        blob["eye_gaze"] = {
-            "t":     eye_gaze["t"],
-            "yaw":   _r(eye_gaze["yaw"], 4),
-            "pitch": _r(eye_gaze["pitch"], 4),
-            "depth": _r(eye_gaze["depth"], 3),
+    if gaze_world:
+        blob["gaze_world"] = {
+            "t_us": gaze_world["t_us"],
+            "dx":   _r(gaze_world["dx"], 4),
+            "dy":   _r(gaze_world["dy"], 4),
+            "dz":   _r(gaze_world["dz"], 4),
         }
     return json.dumps(blob, separators=(',', ':'))
 
@@ -744,12 +746,12 @@ def run_batch_export(args):
             print(f"[align] video_t0 = {video_t0/1e6:.3f}s VRS  →  SLAM T0 ahead by {offset_s:+.3f}s")
         else:
             print(f"[align] no mp4_to_vrs CSV — video↔SLAM alignment will fall back to legacy")
-        eye_gaze = load_eye_gaze(video_id)
+        gaze_world = load_gaze_world(video_id)
 
         data_json = build_data_json(participant, video_id, traj, gaze, objects, movements,
                                     glb_name=glb_in_out.name,
                                     video_t0_vrs_us=video_t0,
-                                    eye_gaze=eye_gaze)
+                                    gaze_world=gaze_world)
         json_path = out_dir / f"slam_{video_id}.json"
         json_path.write_text(data_json, encoding='utf-8')
         print(f"[ok] {json_path.name} ({json_path.stat().st_size // 1024} KB)")
@@ -883,12 +885,12 @@ def main():
     if video_t0 is not None:
         offset_s = (traj["t"][0] - video_t0) / 1e6
         print(f"[align] video_t0 = {video_t0/1e6:.3f}s VRS  →  SLAM T0 ahead by {offset_s:+.3f}s")
-    eye_gaze = load_eye_gaze(video_id) if video_id else None
+    gaze_world = load_gaze_world(video_id) if video_id else None
 
     data_json = build_data_json(participant or '?', video_id or '', traj, gaze, objects, movements,
                                 glb_name=glb_in_out.name,
                                 video_t0_vrs_us=video_t0,
-                                eye_gaze=eye_gaze)
+                                gaze_world=gaze_world)
     size_kb = len(data_json.encode()) // 1024
     print(f"[data] JSON blob: {size_kb} KB")
 
