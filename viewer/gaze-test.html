@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Gaze Dot Test</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #111; color: #eee; font: 13px/1.5 monospace; display: flex; flex-direction: column; height: 100vh; }
+
+#topbar {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+  display: flex; align-items: center; gap: 12px;
+}
+.btn {
+  background: #333; color: #eee; border: 1px solid #555;
+  padding: 3px 10px; cursor: pointer; font: 13px monospace;
+}
+.btn:hover { background: #444; }
+#status { color: #aaa; font-size: 12px; }
+
+#main {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  overflow: auto;
+}
+
+/* Video wrap: inline-block so it shrinks to video size, no extra space */
+#wrap {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  line-height: 0;
+  border: 1px solid #444;
+}
+#vid {
+  display: block;
+  max-width: calc(100vw - 320px);
+  max-height: calc(100vh - 60px);
+  background: #000;
+}
+
+/* Gaze dot */
+#gaze-dot {
+  position: absolute;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #00ff66 10%, #00bb44 55%, transparent 100%);
+  border: 1.5px solid rgba(0,255,100,0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  will-change: transform;
+  top: 0; left: 0;
+}
+
+/* Image boundary overlay (shows where we think the image is) */
+#img-outline {
+  position: absolute;
+  border: 1px dashed rgba(255,200,0,0.6);
+  pointer-events: none;
+  top: 0; left: 0;
+}
+
+/* Debug panel */
+#debug {
+  flex-shrink: 0;
+  width: 280px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.8;
+  align-self: flex-start;
+}
+#debug h3 { color: #8ef; margin-bottom: 6px; font-size: 13px; }
+.drow { display: flex; justify-content: space-between; gap: 8px; }
+.drow .lbl { color: #888; }
+.drow .val { color: #efe; font-weight: bold; }
+.dsep { border-top: 1px solid #333; margin: 6px 0; }
+#hint {
+  margin-top: 10px; padding: 8px; background: #222;
+  border-left: 3px solid #f80; font-size: 11px; color: #fc8; line-height: 1.6;
+}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <strong>Gaze Dot Test</strong>
+  <button class="btn" onclick="document.getElementById('vi').click()">Load video</button>
+  <input type="file" id="vi" accept="video/*" style="display:none">
+  <span id="status">Drop a video file — SLAM JSON loaded automatically from output/</span>
+</div>
+
+<div id="main">
+  <div id="wrap">
+    <video id="vid" controls></video>
+    <div id="gaze-dot" hidden></div>
+    <div id="img-outline" hidden></div>
+  </div>
+
+  <div id="debug">
+    <h3>Gaze debug</h3>
+    <div class="drow"><span class="lbl">video time</span><span class="val" id="d-t">—</span></div>
+    <div class="drow"><span class="lbl">yaw (rad)</span><span class="val" id="d-yaw">—</span></div>
+    <div class="drow"><span class="lbl">pitch (rad)</span><span class="val" id="d-pitch">—</span></div>
+    <div class="drow"><span class="lbl">depth (m)</span><span class="val" id="d-depth">—</span></div>
+    <div class="dsep"></div>
+    <div class="drow"><span class="lbl">raw sensor u</span><span class="val" id="d-u">—</span></div>
+    <div class="drow"><span class="lbl">raw sensor v</span><span class="val" id="d-v">—</span></div>
+    <div class="drow"><span class="lbl">ndcX</span><span class="val" id="d-ndcx">—</span></div>
+    <div class="drow"><span class="lbl">ndcY</span><span class="val" id="d-ndcy">—</span></div>
+    <div class="dsep"></div>
+    <div class="drow"><span class="lbl">video element</span><span class="val" id="d-vel">—</span></div>
+    <div class="drow"><span class="lbl">image area</span><span class="val" id="d-img">—</span></div>
+    <div class="drow"><span class="lbl">dot screen pos</span><span class="val" id="d-dot">—</span></div>
+    <div class="dsep"></div>
+    <div class="drow"><span class="lbl">SLAM samples</span><span class="val" id="d-n">—</span></div>
+    <div class="drow"><span class="lbl">video_t0_vrs</span><span class="val" id="d-t0">—</span></div>
+    <div id="hint">
+      <b>Yellow dashed box</b> = computed image area.<br>
+      If it doesn't match the actual video frame, <code>getImageRect()</code> is wrong.<br><br>
+      <b>Dot should follow gaze</b>: look at a specific object in the video and verify the dot lands on it.
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Calibration (projectaria_tools VRS P01-20240204-095114) ──────────────────
+// R_CAM_CPF = R_device_camera.T * R_device_cpf
+const R_CAM_CPF = [
+  [ 0.0114, -0.9912, -0.1317],
+  [ 0.9997,  0.0094,  0.0173],
+  [-0.0160, -0.1319,  0.9912],
+];
+const GAZE_FX = 607.21;  // fisheye equidistant focal length (px)
+const GAZE_CX = 713.21;  // principal point x (px)
+const GAZE_CY = 704.35;  // principal point y (px)
+const GAZE_W  = 1408;    // sensor width = height (square, Aria RGB)
+// Sensor mounted 90° CW: raw (u,v) → display NDC:
+//   ndcX = 0.5 - v/W  (v = horizontal in display, flipped)
+//   ndcY = u/W - 0.5  (u = vertical in display)
+
+// ── State ────────────────────────────────────────────────────────────────────
+let gazeData = null;  // { t[], yaw[], pitch[], depth[], video_t0_vrs_us }
+
+const vid       = document.getElementById('vid');
+const dot       = document.getElementById('gaze-dot');
+const outline   = document.getElementById('img-outline');
+const statusEl  = document.getElementById('status');
+
+// ── Gaze interpolation ───────────────────────────────────────────────────────
+function bsearch(arr, val) {
+  let lo = 0, hi = arr.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < val) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+function gazeAtTime(tVideoS) {
+  if (!gazeData || !gazeData.t.length) return null;
+  const slam_us = gazeData.video_t0_vrs_us + tVideoS * 1e6;
+  const ts = gazeData.t;
+  const i  = Math.min(bsearch(ts, slam_us), ts.length - 1);
+  if (i === 0 || ts[i] === slam_us)
+    return { yaw: gazeData.yaw[i], pitch: gazeData.pitch[i], depth: gazeData.depth[i] };
+  const t0 = ts[i - 1], t1 = ts[i];
+  const a  = t1 > t0 ? Math.max(0, Math.min(1, (slam_us - t0) / (t1 - t0))) : 0;
+  return {
+    yaw:   gazeData.yaw[i-1]   + a * (gazeData.yaw[i]   - gazeData.yaw[i-1]),
+    pitch: gazeData.pitch[i-1] + a * (gazeData.pitch[i] - gazeData.pitch[i-1]),
+    depth: gazeData.depth[i-1] + a * (gazeData.depth[i] - gazeData.depth[i-1]),
+  };
+}
+
+// ── Projection ───────────────────────────────────────────────────────────────
+function projectGaze(yaw, pitch) {
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const cyw = Math.cos(yaw),  syw = Math.sin(yaw);
+  const dx = syw * cp, dy = sp, dz = cyw * cp;
+  const cx  = R_CAM_CPF[0][0]*dx + R_CAM_CPF[0][1]*dy + R_CAM_CPF[0][2]*dz;
+  const cy2 = R_CAM_CPF[1][0]*dx + R_CAM_CPF[1][1]*dy + R_CAM_CPF[1][2]*dz;
+  const cz  = R_CAM_CPF[2][0]*dx + R_CAM_CPF[2][1]*dy + R_CAM_CPF[2][2]*dz;
+  if (cz <= 0) return null;
+  const r_xy = Math.sqrt(cx*cx + cy2*cy2);
+  const r_px = GAZE_FX * Math.atan2(r_xy, cz);
+  const u = GAZE_CX + (r_xy > 1e-9 ? r_px * cx  / r_xy : 0);
+  const v = GAZE_CY + (r_xy > 1e-9 ? r_px * cy2 / r_xy : 0);
+  return { u, v, ndcX: 0.5 - v / GAZE_W, ndcY: u / GAZE_W - 0.5 };
+}
+
+// ── Image rect (accounts for letterbox / pillarbox bands) ────────────────────
+function getImageRect() {
+  const vw = vid.videoWidth  || GAZE_W;
+  const vh = vid.videoHeight || GAZE_W;
+  const dw = vid.offsetWidth;
+  const dh = vid.offsetHeight;
+  const scale = Math.min(dw / vw, dh / vh);
+  const iw = vw * scale, ih = vh * scale;
+  return { left: (dw - iw) / 2, top: (dh - ih) / 2, width: iw, height: ih };
+}
+
+function updateOutline() {
+  if (!vid.videoWidth) { outline.hidden = true; return; }
+  const r = getImageRect();
+  outline.style.left   = r.left + 'px';
+  outline.style.top    = r.top  + 'px';
+  outline.style.width  = r.width  + 'px';
+  outline.style.height = r.height + 'px';
+  outline.hidden = false;
+}
+
+// ── Render loop ───────────────────────────────────────────────────────────────
+function tick() {
+  requestAnimationFrame(tick);
+  updateOutline();
+
+  // Debug: video element size
+  document.getElementById('d-vel').textContent =
+    `${vid.offsetWidth}×${vid.offsetHeight}`;
+
+  if (!gazeData) return;
+
+  const g = gazeAtTime(vid.currentTime);
+  if (!g) { dot.hidden = true; return; }
+
+  const p = projectGaze(g.yaw, g.pitch);
+  if (!p) { dot.hidden = true; return; }
+
+  const r = getImageRect();
+  const x = r.left + r.width  * (0.5 + p.ndcX);
+  const y = r.top  + r.height * (0.5 + p.ndcY);
+
+  dot.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+  dot.hidden = false;
+
+  // Debug panel
+  document.getElementById('d-t').textContent     = vid.currentTime.toFixed(3) + 's';
+  document.getElementById('d-yaw').textContent   = g.yaw.toFixed(4);
+  document.getElementById('d-pitch').textContent = g.pitch.toFixed(4);
+  document.getElementById('d-depth').textContent = g.depth.toFixed(2);
+  document.getElementById('d-u').textContent     = p.u.toFixed(1);
+  document.getElementById('d-v').textContent     = p.v.toFixed(1);
+  document.getElementById('d-ndcx').textContent  = p.ndcX.toFixed(4);
+  document.getElementById('d-ndcy').textContent  = p.ndcY.toFixed(4);
+  document.getElementById('d-img').textContent   =
+    `${r.width.toFixed(0)}×${r.height.toFixed(0)} @ (${r.left.toFixed(0)},${r.top.toFixed(0)})`;
+  document.getElementById('d-dot').textContent   =
+    `(${x.toFixed(0)}, ${y.toFixed(0)})`;
+}
+requestAnimationFrame(tick);
+
+// ── Load SLAM JSON ────────────────────────────────────────────────────────────
+async function loadSlam(videoId) {
+  gazeData = null;
+  dot.hidden = true;
+  try {
+    const url = `../output/slam_${videoId}.json?v=${Date.now()}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      statusEl.textContent = `No SLAM JSON for ${videoId} — run: python3 view_slam_3d.py --participant P0X --session N --export-only`;
+      return;
+    }
+    const blob = await res.json();
+    if (!blob.eye_gaze || !blob.eye_gaze.t || !blob.eye_gaze.t.length) {
+      statusEl.textContent = `SLAM JSON loaded but has no eye_gaze data`;
+      return;
+    }
+    const t0 = blob.trajectory?.video_t0_vrs_us ?? blob.eye_gaze.t[0];
+    gazeData = { ...blob.eye_gaze, video_t0_vrs_us: t0 };
+    document.getElementById('d-n').textContent  = gazeData.t.length;
+    document.getElementById('d-t0').textContent = t0.toFixed(0) + ' µs';
+    statusEl.textContent = `✓ ${videoId} — ${gazeData.t.length} gaze samples  |  video_t0=${t0.toFixed(0)}µs`;
+  } catch (e) {
+    statusEl.textContent = `Error: ${e.message}`;
+  }
+}
+
+// ── Video input ───────────────────────────────────────────────────────────────
+function loadVideo(file) {
+  vid.src = URL.createObjectURL(file);
+  const videoId = file.name.replace(/\.[^.]+$/, '');
+  statusEl.textContent = `Loading ${videoId}…`;
+  loadSlam(videoId);
+}
+
+document.getElementById('vi').addEventListener('change', e => {
+  if (e.target.files[0]) loadVideo(e.target.files[0]);
+});
+
+const wrap = document.getElementById('wrap');
+wrap.addEventListener('dragover', e => e.preventDefault());
+wrap.addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) loadVideo(e.dataTransfer.files[0]);
+});
+document.body.addEventListener('dragover', e => e.preventDefault());
+document.body.addEventListener('drop', e => {
+  e.preventDefault();
+  if (e.dataTransfer.files[0]) loadVideo(e.dataTransfer.files[0]);
+});
+</script>
+</body>
+</html>
