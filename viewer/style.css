@@ -185,6 +185,7 @@
     min-height: 0;
     overflow-y: auto;
     scroll-behavior: smooth;
+    position: relative;  /* makes annot-list the offsetParent for items → offsetTop is scroll-content-relative */
   }
   #activities-panel, #steps-panel {
     flex: 0 0 var(--rsz-h, 22%);
@@ -194,6 +195,7 @@
     background: #0f0f0f;
     font-size: 13px;
     color: #aaa;
+    position: relative;
   }
   #activities-panel.sec-collapsed, #steps-panel.sec-collapsed { flex: 0 0 auto; overflow: hidden; }
   #activities-panel.sec-collapsed .sec-body, #steps-panel.sec-collapsed .sec-body { display: none; }

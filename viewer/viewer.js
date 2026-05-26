@@ -140,25 +140,18 @@ function updateCaptionSpacers() {
   });
 }
 
-function scrollActiveItemToCenter(item) {
-  const container = annotList;
+function scrollActiveItemToCenter(item, container = annotList) {
   const containerCenter = container.clientHeight / 2;
 
-  // Let first/last captions center correctly without fixed offsets.
-  const spacerSize = Math.max(0, containerCenter - (item.clientHeight / 2));
-  container.querySelectorAll('.annot-spacer').forEach(spacer => {
-    spacer.style.height = `${spacerSize}px`;
-  });
+  // No artificial padding: first/last items sit at the natural edge.
+  container.querySelectorAll('.annot-spacer').forEach(s => { s.style.height = '0'; });
 
   const captionCenter = item.offsetTop + (item.clientHeight / 2);
   let targetScrollTop = captionCenter - containerCenter;
   const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight);
   targetScrollTop = Math.max(0, Math.min(targetScrollTop, maxScroll));
 
-  container.scrollTo({
-    top: targetScrollTop,
-    behavior: 'smooth'
-  });
+  container.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
 }
 
 // ---- CSV parser (handles quoted fields) ----
@@ -1101,17 +1094,25 @@ function renderStepsPanel() {
 }
 
 function highlightActiveActivity(t) {
+  let active = null;
   activitiesPanel.querySelectorAll('.timeline-item').forEach(item => {
     const s = parseFloat(item.dataset.start), e = parseFloat(item.dataset.end);
-    item.classList.toggle('active', s <= t && (isNaN(e) || e >= t));
+    const isActive = s <= t && (isNaN(e) || e >= t);
+    item.classList.toggle('active', isActive);
+    if (isActive) active = item;
   });
+  if (active) scrollActiveItemToCenter(active, activitiesPanel);
 }
 
 function highlightActiveStep(t) {
+  let active = null;
   stepsPanel.querySelectorAll('.timeline-item').forEach(item => {
     const s = parseFloat(item.dataset.start), e = parseFloat(item.dataset.end);
-    item.classList.toggle('active', s <= t && e >= t);
+    const isActive = s <= t && e >= t;
+    item.classList.toggle('active', isActive);
+    if (isActive) active = item;
   });
+  if (active) scrollActiveItemToCenter(active, stepsPanel);
 }
 
 // ---- Nutritional tracker ----
