@@ -258,7 +258,6 @@
   #nutrition-panel.has-nutrition { display: block; }
   #nutrition-panel.sec-collapsed { flex: 0 0 auto; overflow: hidden; }
   #nutrition-panel.sec-collapsed .sec-body { display: none; }
-  .nut-header { padding: 6px 14px; font-size: 11px; font-weight: 600; color: #666; background: #111; border-bottom: 1px solid #1e1e1e; position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; }
   .nut-cal-row { display: flex; align-items: center; gap: 6px; padding: 8px 14px 4px; }
   .nut-flame { font-size: 14px; flex-shrink: 0; }
   .nut-cal-num { font-size: 18px; font-weight: 700; color: #fb923c; font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 36px; }
@@ -303,8 +302,7 @@
   #vqa-panel.has-questions { display: block; }
   #vqa-panel.sec-collapsed { flex: 0 0 auto; overflow: hidden; }
   #vqa-panel.sec-collapsed .sec-body { display: none; }
-  .vqa-header { padding: 6px 14px; font-size: 11px; font-weight: 600; color: #666; background: #111; border-bottom: 1px solid #1e1e1e; position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; }
-  .vqa-counts { padding: 6px 14px; display: flex; flex-direction: column; gap: 4px; background: #0c0c0c; border-bottom: 1px solid #1a1a1a; position: sticky; top: 28px; z-index: 1; }
+  .vqa-counts { padding: 6px 14px; display: flex; flex-direction: column; gap: 4px; background: #0c0c0c; border-bottom: 1px solid #1a1a1a; position: sticky; top: 33px; z-index: 1; }
   .vqa-group-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .vqa-group-hdr { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.09em; color: #4b5563; white-space: nowrap; flex-shrink: 0; line-height: 1; }
   .vqa-group-chips { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 5px; scrollbar-width: none; min-width: 0; }
@@ -340,16 +338,22 @@
   #search::placeholder { color: #555; }
   #search:focus { outline: none; border-color: #555; }
 
-  /* Scrollbar — shared across all three annotation panels */
+  /* Scrollbar — shared across all annotation panels */
   #annot-list::-webkit-scrollbar,
   #activities-panel::-webkit-scrollbar,
-  #steps-panel::-webkit-scrollbar { width: 4px; }
+  #steps-panel::-webkit-scrollbar,
+  #nutrition-panel::-webkit-scrollbar,
+  #vqa-panel::-webkit-scrollbar { width: 4px; }
   #annot-list::-webkit-scrollbar-track,
   #activities-panel::-webkit-scrollbar-track,
-  #steps-panel::-webkit-scrollbar-track { background: transparent; }
+  #steps-panel::-webkit-scrollbar-track,
+  #nutrition-panel::-webkit-scrollbar-track,
+  #vqa-panel::-webkit-scrollbar-track { background: transparent; }
   #annot-list::-webkit-scrollbar-thumb,
   #activities-panel::-webkit-scrollbar-thumb,
-  #steps-panel::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+  #steps-panel::-webkit-scrollbar-thumb,
+  #nutrition-panel::-webkit-scrollbar-thumb,
+  #vqa-panel::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
 
   @media (max-width: 1100px) {
     #video-panel { flex-basis: 50%; }
@@ -366,7 +370,9 @@
   .resize-handle:hover, .resize-handle.dragging { background: #5a9fd4; }
   .resize-handle.h-v { height: 4px; cursor: row-resize; }
   .resize-handle.h-h { width: 4px; cursor: col-resize; }
-  /* hide handle when adjacent (paired) panel is hidden */
+  /* hide handle when adjacent (paired) panel is hidden or collapsed */
   body.no-slam #rsz-video-slam { display: none; }
+  #activities-panel.sec-collapsed + #rsz-act-step { display: none; }
+  #steps-panel.sec-collapsed + #rsz-step-nar { display: none; }
   #annot-panel:not(:has(#nutrition-panel.has-nutrition)) #rsz-nar-nut { display: none; }
   #annot-panel:not(:has(#vqa-panel.has-questions)) #rsz-nut-vqa { display: none; }

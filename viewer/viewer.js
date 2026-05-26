@@ -241,6 +241,10 @@ function applySectionState(name) {
   const collapsed = !!_secState[name];
   if (name === 'narrations') {
     document.getElementById('narrations-body').classList.toggle('sec-collapsed', collapsed);
+  } else if (name === 'activities') {
+    document.getElementById('activities-panel').classList.toggle('sec-collapsed', collapsed);
+  } else if (name === 'steps') {
+    document.getElementById('steps-panel').classList.toggle('sec-collapsed', collapsed);
   } else if (name === 'vqa') {
     document.getElementById('vqa-panel').classList.toggle('sec-collapsed', collapsed);
   } else if (name === 'nutrition') {
@@ -263,7 +267,7 @@ document.querySelector('.sec-toggle[data-sec="narrations"]')
   .addEventListener('click', () => toggleSection('narrations'));
 
 // Apply saved states on load
-['narrations', 'recipe', 'nutrition', 'vqa'].forEach(applySectionState);
+['activities', 'steps', 'narrations', 'nutrition', 'vqa'].forEach(applySectionState);
 
 function refreshStatus() {
   if (!allAnnotations.length && !allAudioAnnotations.length && !rawRecipesJson) {
@@ -515,7 +519,7 @@ function renderVqaList(videoId) {
   }).join('');
 
   vqaPanel.innerHTML =
-    `<div class="vqa-header">VQA · ${_vqaSorted.length} question${_vqaSorted.length > 1 ? 's' : ''}<button class="sec-toggle" data-sec="vqa">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-header-row"><span class="sec-label">VQA · ${_vqaSorted.length} question${_vqaSorted.length > 1 ? 's' : ''}</span><button class="sec-toggle" data-sec="vqa">${collapsed ? '▸' : '▾'}</button></div>` +
     `<div class="sec-body"><div class="vqa-counts">${countChips}</div>${cards}</div>`;
   vqaPanel.classList.add('has-questions');
   vqaPanel.classList.toggle('sec-collapsed', collapsed);
@@ -1215,7 +1219,7 @@ function renderNutritionPanel() {
     : `<div class="nut-no-data">No calorie data for this recipe</div>`;
 
   nutritionPanel.innerHTML =
-    `<div class="nut-header">Nutrition · ${totCalStr} total ` +
+    `<div class="sec-header-row"><span class="sec-label">Nutrition · ${totCalStr} total</span>` +
       `<button class="sec-toggle" data-sec="nutrition">${collapsed ? '▸' : '▾'}</button></div>` +
     `<div class="sec-body">` +
       trackerHtml +
@@ -1806,17 +1810,17 @@ function makeResizable({ handle, target, dir, min = 60, sign = 1, key, onResize 
     dir: 'v', sign: -1, min: 80, key: 'rsz_video_slam',
     onResize: slamResize,
   });
-  // C: activities|steps — drag DOWN shrinks steps
+  // C: activities|steps — drag DOWN grows activities (narrations flex:1 shrinks)
   makeResizable({
     handle: document.getElementById('rsz-act-step'),
-    target: document.getElementById('steps-panel'),
-    dir: 'v', sign: -1, min: 40, key: 'rsz_act_step',
+    target: document.getElementById('activities-panel'),
+    dir: 'v', sign: 1, min: 40, key: 'rsz_act_step',
   });
-  // D: steps|narrations — drag DOWN shrinks narrations-body
+  // D: steps|narrations — drag DOWN grows steps (narrations flex:1 shrinks)
   makeResizable({
     handle: document.getElementById('rsz-step-nar'),
-    target: document.getElementById('narrations-body'),
-    dir: 'v', sign: -1, min: 40, key: 'rsz_step_nar',
+    target: document.getElementById('steps-panel'),
+    dir: 'v', sign: 1, min: 40, key: 'rsz_step_nar',
   });
   // E: narrations|nutrition — drag DOWN shrinks nutrition
   makeResizable({
