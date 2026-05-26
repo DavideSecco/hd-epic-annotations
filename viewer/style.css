@@ -200,13 +200,13 @@
   }
   #activities-panel.sec-collapsed, #steps-panel.sec-collapsed { flex: 0 0 auto; overflow: hidden; }
   #activities-panel.sec-collapsed .sec-body, #steps-panel.sec-collapsed .sec-body { display: none; }
-  #activities-panel .sec-body, #steps-panel .sec-body { padding: 10px 14px 14px; }
+  #activities-panel .sec-body, #steps-panel .sec-body { padding: 2px 0 4px; }
   .sec-header-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; position: sticky; top: 0; background: #0f0f0f; border-bottom: 1px solid #1e1e1e; }
   .sec-label { font-size: 12px; font-weight: 600; color: #ccc; }
   /* timeline-item: shared by activities and steps lists */
-  .timeline-item { transition: background 0.12s; border-radius: 3px; padding: 4px 2px; margin-bottom: 4px; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .timeline-item { transition: background 0.12s; border-radius: 3px; padding: 5px 14px; margin-bottom: 0; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .timeline-item.active, .annot-item.active { background: #1a2a1a; border-left: 3px solid #4ade80; }
-  .timeline-item.active { padding-left: 6px; }
+  .timeline-item.active { padding-left: 11px; }
   .timeline-item.active .recipe-item-time .seek-btn { border-color: #4ade80; color: #4ade80; }
   .act-label { flex: 1; min-width: 0; color: #aaa; font-size: 13px; }
   .step-text { flex-basis: 100%; color: #aaa; font-size: 13px; padding-top: 2px; }
@@ -223,8 +223,8 @@
     font-weight: 600;
     line-height: 1.25;
   }
-  #activities-panel ol, #steps-panel ol { margin-left: 18px; padding-top: 4px; }
-  #activities-panel li, #steps-panel li { margin-bottom: 8px; line-height: 1.4; font-size: 13px; }
+  #activities-panel ol, #steps-panel ol { margin-left: 0; padding-top: 0; }
+  #activities-panel li, #steps-panel li { line-height: 1.4; font-size: 13px; }
   .recipe-empty { color: #666; }
   .recipe-item-time { display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: nowrap; font-family: monospace; font-size: 10px; }
   .recipe-item-dur { color: #4b5563; font-size: 10px; font-family: monospace; }
