@@ -499,7 +499,7 @@ function renderVqaList(videoId) {
     const noTime = e.startS === 0 && e.endS === 0;
     const windowHtml = noTime
       ? '<span class="vqa-window vqa-fullvideo">full video</span>'
-      : `<span class="vqa-window">${fmtTime(e.startS, true)} → ${fmtTime(e.endS, true)} <span class="vqa-dur">+${dur}s</span></span>`;
+      : `<span class="vqa-window"><button class="vqa-time-btn" data-t="${e.startS}">${fmtTime(e.startS, true)}</button> → <button class="vqa-time-btn" data-t="${e.endS}">${fmtTime(e.endS, true)}</button> <span class="vqa-dur">+${dur}s</span></span>`;
     const choicesHtml = e.choices.map((c, j) => {
       const text = Array.isArray(c)
         ? c.map((x, k) => `<span class="vqa-ord-item">${k+1}. ${cleanVqaText(x)}</span>`).join('')
