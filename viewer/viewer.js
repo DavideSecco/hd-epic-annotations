@@ -16,6 +16,30 @@ const tCur = document.getElementById('t-cur');
 const tEnd = document.getElementById('t-end');
 const timeMsOverlay = document.getElementById('time-ms-overlay');
 
+// ---- "You are here" position indicator (one per panel) ----
+const actPosLine  = Object.assign(document.createElement('li'),  {className: 'pos-line'});
+const stepPosLine = Object.assign(document.createElement('li'),  {className: 'pos-line'});
+const narrPosLine = Object.assign(document.createElement('div'), {className: 'pos-line'});
+const _posLineAfter = new WeakMap();
+
+function _insertPosLine(posLine, items, t, container) {
+  let after = null;
+  for (const item of items) {
+    if (parseFloat(item.dataset.start) <= t) after = item;
+    else break;
+  }
+  if (_posLineAfter.get(posLine) === after) return;
+  _posLineAfter.set(posLine, after);
+  posLine.remove();
+  if (!items.length) return;
+  after ? after.after(posLine) : items[0].before(posLine);
+  scrollActiveItemToCenter(posLine, container);
+}
+
+function _hidePosLine(posLine) {
+  if (posLine.parentNode) { posLine.remove(); _posLineAfter.set(posLine, undefined); }
+}
+
 // ---- Object mask state ----
 let allMaskData  = null;
 let allAssocData = null;
@@ -1058,22 +1082,24 @@ function _wireSeekers(el) {
 
 function renderActivitiesPanel() {
   const collapsed = !!_secState['activities'];
-  const infoHtml = currentRecipeMeta
-    ? `<div class="act-recipe-info">${currentRecipeMeta.name}${currentRecipeMeta.source ? ` · <a href="${currentRecipeMeta.source}" target="_blank" rel="noopener noreferrer">Recipe link</a>` : ''}</div>`
+  const recipeInline = currentRecipeMeta
+    ? `<span class="act-recipe-info-inline">${currentRecipeMeta.name}${currentRecipeMeta.source ? ` · <a href="${currentRecipeMeta.source}" target="_blank" rel="noopener noreferrer">link</a>` : ''}</span>`
     : '';
   const listHtml = activitySegments.length
     ? `<ol>${activitySegments.map(a => {
-        const endS = isNaN(a.end) ? (vid.duration || 0) : a.end;
-        const dur  = (endS - a.start).toFixed(1);
-        return `<li class="timeline-item" data-start="${a.start}" data-end="${endS}"><div class="recipe-item-time">${_seekBtnHtml(a.start)} → ${_seekBtnHtml(endS)} <span class="recipe-item-dur">+${dur}s</span></div><span class="act-label">${a.label}</span></li>`;
+        const endS = isNaN(a.end) ? vid.duration : a.end;
+        const dur  = isFinite(endS) ? (endS - a.start).toFixed(1) : null;
+        const endPart = isFinite(endS) ? `→ ${_seekBtnHtml(endS)} <span class="recipe-item-dur">+${dur}s</span>` : '';
+        return `<li class="timeline-item" data-start="${a.start}" data-end="${a.end}"><div class="recipe-item-time">${_seekBtnHtml(a.start)} ${endPart}</div><span class="act-label">${a.label}</span></li>`;
       }).join('')}</ol>`
     : '<div class="recipe-empty">No activity data for this video</div>';
   activitiesPanel.innerHTML =
-    `<div class="sec-header-row"><span class="sec-label">Activities</span><button class="sec-toggle" data-sec="activities">${collapsed ? '▸' : '▾'}</button></div>` +
-    `<div class="sec-body">${infoHtml}${listHtml}</div>`;
+    `<div class="sec-header-row"><span class="sec-label">Activities</span>${recipeInline}<button class="sec-toggle" data-sec="activities">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-body">${listHtml}</div>`;
   activitiesPanel.classList.toggle('sec-collapsed', collapsed);
   activitiesPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('activities'));
   _wireSeekers(activitiesPanel);
+  _hidePosLine(actPosLine);
 }
 
 function renderStepsPanel() {
@@ -1082,7 +1108,7 @@ function renderStepsPanel() {
     ? `<ol>${stepAnnotations.map(s => {
         const dur = (s.stop - s.start).toFixed(1);
         const badge = s.type === 'prep' ? '<span class="step-type-badge">prep</span>' : '<span class="step-type-badge step-badge-step">step</span>';
-        return `<li class="timeline-item" data-start="${s.start}" data-end="${s.stop}"><div class="recipe-item-time">${badge}${_seekBtnHtml(s.start)} → ${_seekBtnHtml(s.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="act-label">${s.text}</span></li>`;
+        return `<li class="timeline-item" data-start="${s.start}" data-end="${s.stop}"><div class="recipe-item-time">${badge}${_seekBtnHtml(s.start)} → ${_seekBtnHtml(s.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="step-text">${s.text}</span></li>`;
       }).join('')}</ol>`
     : '<div class="recipe-empty">No steps for this video</div>';
   stepsPanel.innerHTML =
@@ -1091,28 +1117,39 @@ function renderStepsPanel() {
   stepsPanel.classList.toggle('sec-collapsed', collapsed);
   stepsPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('steps'));
   _wireSeekers(stepsPanel);
+  _hidePosLine(stepPosLine);
 }
 
 function highlightActiveActivity(t) {
   let active = null;
   activitiesPanel.querySelectorAll('.timeline-item').forEach(item => {
     const s = parseFloat(item.dataset.start), e = parseFloat(item.dataset.end);
-    const isActive = s <= t && (isNaN(e) || e >= t);
+    const isActive = s <= t && (isNaN(e) || e > t);
     item.classList.toggle('active', isActive);
     if (isActive) active = item;
   });
-  if (active) scrollActiveItemToCenter(active, activitiesPanel);
+  if (active) {
+    _hidePosLine(actPosLine);
+    scrollActiveItemToCenter(active, activitiesPanel);
+  } else {
+    _insertPosLine(actPosLine, [...activitiesPanel.querySelectorAll('.timeline-item')], t, activitiesPanel);
+  }
 }
 
 function highlightActiveStep(t) {
   let active = null;
   stepsPanel.querySelectorAll('.timeline-item').forEach(item => {
     const s = parseFloat(item.dataset.start), e = parseFloat(item.dataset.end);
-    const isActive = s <= t && e >= t;
+    const isActive = s <= t && e > t;
     item.classList.toggle('active', isActive);
     if (isActive) active = item;
   });
-  if (active) scrollActiveItemToCenter(active, stepsPanel);
+  if (active) {
+    _hidePosLine(stepPosLine);
+    scrollActiveItemToCenter(active, stepsPanel);
+  } else {
+    _insertPosLine(stepPosLine, [...stepsPanel.querySelectorAll('.timeline-item')], t, stepsPanel);
+  }
 }
 
 // ---- Nutritional tracker ----
@@ -1465,6 +1502,7 @@ vid.addEventListener('loadedmetadata', () => {
   tEnd.textContent = fmtTime(vid.duration, true);
   syncBboxCanvas();
   buildTimeline();
+  renderActivitiesPanel();  // re-render so open-ended activities get the real end time
 });
 
 vid.addEventListener('timeupdate', () => {
@@ -1653,15 +1691,17 @@ timelineTrack.addEventListener('click', e => {
 function highlightActive(t) {
   let idx = -1;
   for (let i = 0; i < annotations.length; i++) {
-    if (annotations[i].start <= t && annotations[i].stop >= t) { idx = i; break; }
+    if (annotations[i].start <= t && annotations[i].stop > t) { idx = i; break; }
   }
 
+  // pos-line: visible only in genuine gaps (no active annotation)
   if (idx === -1) {
-    for (let i = annotations.length - 1; i >= 0; i--) {
-      if (annotations[i].start <= t) { idx = i; break; }
-    }
+    _insertPosLine(narrPosLine, [...annotList.querySelectorAll('.annot-item')], t, annotList);
+  } else {
+    _hidePosLine(narrPosLine);
   }
 
+  // Dedup on truly-active index only — no fallback loop so gaps always clear .active
   if (idx === activeIdx) return;
   activeIdx = idx;
 
@@ -1697,6 +1737,7 @@ function renderList(annots) {
     const el = document.createElement('div');
     el.className = 'annot-item';
     el.dataset.annotIndex = String(i);
+    el.dataset.start = String(Math.max(0, Number(a.start || 0)));
 
     const hw = (a.type === 'narration' && currentVideoId)
       ? findHowWhy(currentVideoId, a.start, a.stop ?? a.start + 1)
