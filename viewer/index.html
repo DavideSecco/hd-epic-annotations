@@ -88,17 +88,19 @@
   <div class="resize-handle h-h" id="rsz-video-annot" title="Drag to resize video / annotations"></div>
 
   <div id="annot-panel">
-    <div id="annot-header">Narrations <button class="sec-toggle" data-sec="narrations" title="Collapse/expand">▾</button></div>
+    <div id="activities-panel"></div>
+    <div class="resize-handle h-v" id="rsz-act-step" title="Drag to resize Activities / Steps"></div>
+    <div id="steps-panel"></div>
+    <div class="resize-handle h-v" id="rsz-step-nar" title="Drag to resize Steps / Narrations"></div>
+    <div id="annot-header">
+      <span class="sec-label">Narrations</span>
+      <input type="text" id="search" placeholder="Search narrations, audio, recipes…">
+      <button class="sec-toggle" data-sec="narrations" title="Collapse/expand">▾</button>
+    </div>
     <div id="narrations-body">
-      <div id="step-context">Nessuna macro-fase attiva</div>
-      <div id="search-wrap">
-        <input type="text" id="search" placeholder="Search narrations, audio and recipes steps…">
-      </div>
       <div id="annot-list"></div>
     </div>
-    <div class="resize-handle h-v" id="rsz-nar-rec" title="Drag to resize Recipe"></div>
-    <div id="recipe-overview"></div>
-    <div class="resize-handle h-v" id="rsz-rec-nut" title="Drag to resize Nutrition"></div>
+    <div class="resize-handle h-v" id="rsz-nar-nut" title="Drag to resize Narrations / Nutrition"></div>
     <div id="nutrition-panel"></div>
     <div class="resize-handle h-v" id="rsz-nut-vqa" title="Drag to resize VQA"></div>
     <div id="vqa-panel"></div>

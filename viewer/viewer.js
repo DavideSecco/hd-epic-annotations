@@ -7,9 +7,9 @@ const timelineSvg = document.getElementById('timeline-segments');
 const cursor = document.getElementById('timeline-cursor');
 const progress = document.getElementById('timeline-progress');
 const annotList = document.getElementById('annot-list');
-const recipeOverview = document.getElementById('recipe-overview');
 const audioHud = document.getElementById('audio-hud');
-const stepContext = document.getElementById('step-context');
+const activitiesPanel = document.getElementById('activities-panel');
+const stepsPanel      = document.getElementById('steps-panel');
 const searchInput = document.getElementById('search');
 const tStart = document.getElementById('t-start');
 const tCur = document.getElementById('t-cur');
@@ -241,8 +241,6 @@ function applySectionState(name) {
   const collapsed = !!_secState[name];
   if (name === 'narrations') {
     document.getElementById('narrations-body').classList.toggle('sec-collapsed', collapsed);
-  } else if (name === 'recipe') {
-    document.getElementById('recipe-overview').classList.toggle('sec-collapsed', collapsed);
   } else if (name === 'vqa') {
     document.getElementById('vqa-panel').classList.toggle('sec-collapsed', collapsed);
   } else if (name === 'nutrition') {
@@ -734,10 +732,10 @@ function applyVideoFilter() {
     nutritionTimeline = [];
     nutritionRecipeTotals = null;
     renderList(filteredAnnotations);
-    renderRecipeOverview(null);
+    renderActivitiesPanel();
+    renderStepsPanel();
     renderNutritionPanel();
     renderAudioHud(0);
-    updateStepContext(0);
     buildTimeline();
     clearCurrentAnnotation();
     refreshStatus();
@@ -779,11 +777,13 @@ function applyVideoFilter() {
   buildMaskLookup(currentVideoId);
   loadHandMasks(currentVideoId);  // async, non-blocking
   renderList(filteredAnnotations);
-  renderRecipeOverview(currentRecipeMeta);
+  renderActivitiesPanel();
+  renderStepsPanel();
   renderNutritionPanel();
   renderAudioHud(vid.currentTime || 0);
   renderMaskBoxes(vid.currentTime || 0);
-  updateStepContext(vid.currentTime || 0);
+  highlightActiveActivity(vid.currentTime || 0);
+  highlightActiveStep(vid.currentTime || 0);
   buildTimeline();
   clearCurrentAnnotation();
   refreshStatus();
@@ -1049,28 +1049,65 @@ function extractStepsForVideo(videoId) {
   currentRecipeMeta = matchedRecipeMeta;
 }
 
-function renderRecipeOverview(meta) {
-  const collapsed = !!_secState['recipe'];
-  if (!meta) {
-    recipeOverview.innerHTML =
-      `<div class="sec-header-row"><span class="sec-label">Recipe</span><button class="sec-toggle" data-sec="recipe">${collapsed ? '▸' : '▾'}</button></div>` +
-      `<div class="sec-body"><div class="recipe-empty">Nessuna ricetta associata</div></div>`;
-  } else {
-    const safeName = String(meta.name || 'Ricetta').trim();
-    const safeSource = String(meta.source || '').trim();
-    const stepValues = Object.values(meta.steps || {}).map(v => String(v || '').trim()).filter(Boolean);
-    const listHtml = stepValues.length
-      ? `<ol>${stepValues.map(step => `<li>${step}</li>`).join('')}</ol>`
-      : '<div class="recipe-empty">Nessuno step disponibile</div>';
-    const sourceHtml = safeSource
-      ? `<div class="recipe-source">Sorgente: <a href="${safeSource}" target="_blank" rel="noopener noreferrer">Link Ricetta originale</a></div>`
-      : '<div class="recipe-source">Sorgente non disponibile</div>';
-    recipeOverview.innerHTML =
-      `<div class="sec-header-row"><span class="sec-label">${safeName}</span><button class="sec-toggle" data-sec="recipe">${collapsed ? '▸' : '▾'}</button></div>` +
-      `<div class="sec-body">${sourceHtml}${listHtml}</div>`;
-  }
-  recipeOverview.classList.toggle('sec-collapsed', collapsed);
-  recipeOverview.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('recipe'));
+function _seekBtnHtml(t) {
+  return `<button class="seek-btn" data-t="${t}">${fmtTime(t, true)}</button>`;
+}
+
+function _wireSeekers(el) {
+  el.querySelectorAll('.seek-btn').forEach(btn =>
+    btn.addEventListener('click', ev => { ev.stopPropagation(); if (vid.duration) vid.currentTime = parseFloat(btn.dataset.t); })
+  );
+}
+
+function renderActivitiesPanel() {
+  const collapsed = !!_secState['activities'];
+  const infoHtml = currentRecipeMeta
+    ? `<div class="act-recipe-info">${currentRecipeMeta.name}${currentRecipeMeta.source ? ` · <a href="${currentRecipeMeta.source}" target="_blank" rel="noopener noreferrer">Recipe link</a>` : ''}</div>`
+    : '';
+  const listHtml = activitySegments.length
+    ? `<ol>${activitySegments.map(a => {
+        const endS = isNaN(a.end) ? (vid.duration || 0) : a.end;
+        const dur  = (endS - a.start).toFixed(1);
+        return `<li class="timeline-item" data-start="${a.start}" data-end="${endS}"><div class="recipe-item-time">${_seekBtnHtml(a.start)} → ${_seekBtnHtml(endS)} <span class="recipe-item-dur">+${dur}s</span></div><span class="act-label">${a.label}</span></li>`;
+      }).join('')}</ol>`
+    : '<div class="recipe-empty">No activity data for this video</div>';
+  activitiesPanel.innerHTML =
+    `<div class="sec-header-row"><span class="sec-label">Activities</span><button class="sec-toggle" data-sec="activities">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-body">${infoHtml}${listHtml}</div>`;
+  activitiesPanel.classList.toggle('sec-collapsed', collapsed);
+  activitiesPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('activities'));
+  _wireSeekers(activitiesPanel);
+}
+
+function renderStepsPanel() {
+  const collapsed = !!_secState['steps'];
+  const listHtml = stepAnnotations.length
+    ? `<ol>${stepAnnotations.map(s => {
+        const dur = (s.stop - s.start).toFixed(1);
+        const badge = s.type === 'prep' ? '<span class="step-type-badge">prep</span>' : '<span class="step-type-badge step-badge-step">step</span>';
+        return `<li class="timeline-item" data-start="${s.start}" data-end="${s.stop}"><div class="recipe-item-time">${badge}${_seekBtnHtml(s.start)} → ${_seekBtnHtml(s.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="act-label">${s.text}</span></li>`;
+      }).join('')}</ol>`
+    : '<div class="recipe-empty">No steps for this video</div>';
+  stepsPanel.innerHTML =
+    `<div class="sec-header-row"><span class="sec-label">Steps</span><button class="sec-toggle" data-sec="steps">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-body">${listHtml}</div>`;
+  stepsPanel.classList.toggle('sec-collapsed', collapsed);
+  stepsPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('steps'));
+  _wireSeekers(stepsPanel);
+}
+
+function highlightActiveActivity(t) {
+  activitiesPanel.querySelectorAll('.timeline-item').forEach(item => {
+    const s = parseFloat(item.dataset.start), e = parseFloat(item.dataset.end);
+    item.classList.toggle('active', s <= t && (isNaN(e) || e >= t));
+  });
+}
+
+function highlightActiveStep(t) {
+  stepsPanel.querySelectorAll('.timeline-item').forEach(item => {
+    const s = parseFloat(item.dataset.start), e = parseFloat(item.dataset.end);
+    item.classList.toggle('active', s <= t && e >= t);
+  });
 }
 
 // ---- Nutritional tracker ----
@@ -1253,28 +1290,6 @@ function getActivityAt(t) {
   return activitySegments.find(a => a.start <= t && (isNaN(a.end) || a.end >= t)) || null;
 }
 
-let _lastStepContextText = null;
-
-function updateStepContext(currentTime) {
-  const activeStep = getActiveStepAt(currentTime);
-  const activeAct  = getActivityAt(currentTime);
-
-  let html, color;
-  if (!activeStep && !activeAct) {
-    html = '<span class="ctx-empty">No active phase</span>';
-    color = '#3b82f6';
-  } else {
-    const parts = [];
-    if (activeAct)  parts.push(`<span class="ctx-act"><span class="ctx-dot" style="background:#9333ea"></span><span class="ctx-lbl">Activity</span>${activeAct.label}</span>`);
-    if (activeStep) parts.push(`<span class="ctx-step"><span class="ctx-dot" style="background:${activeStep.type === 'prep' ? '#0ea5e9' : '#3b82f6'}"></span><span class="ctx-lbl">${activeStep.type === 'prep' ? 'Prep' : 'Recipe step'}</span>${activeStep.text}</span>`);
-    html = parts.join('');
-    color = activeAct ? '#9333ea' : '#3b82f6';
-  }
-  if (html === _lastStepContextText) return;
-  _lastStepContextText = html;
-  stepContext.innerHTML = html;
-  stepContext.style.borderBottomColor = color;
-}
 
 let _audioHudActiveIds = '';
 
@@ -1458,7 +1473,8 @@ vid.addEventListener('timeupdate', () => {
     timeMsOverlay.textContent = fmtTime(t, true);
     renderMaskBoxes(t);  // only when rAF loop is not running (paused/seek)
   }
-  updateStepContext(t);
+  highlightActiveActivity(t);
+  highlightActiveStep(t);
   renderNutritionTracker(t);
   renderVqaPanel(t);
   highlightActive(t);
@@ -1680,12 +1696,23 @@ function renderList(annots) {
     const hw = (a.type === 'narration' && currentVideoId)
       ? findHowWhy(currentVideoId, a.start, a.stop ?? a.start + 1)
       : null;
+    const tStart = Math.max(0, Number(a.start || 0));
+    const tStop  = Math.max(tStart, Number(a.stop  || tStart));
+    const dur    = (tStop - tStart).toFixed(1);
     el.innerHTML = `
-      <div class="annot-time">${fmtCaptionMeta(a.start, a.stop)}</div>
+      <div class="annot-meta">
+        <button class="seek-btn" data-t="${tStart}">${fmtTime(tStart, true)}</button>
+        →
+        <button class="seek-btn" data-t="${tStop}">${fmtTime(tStop, true)}</button>
+        <span class="annot-dur">+${dur}s</span>
+        ${a.verb ? `<span class="tag-v">${a.verb}</span>` : ''}${a.noun ? `<span class="tag-n">${a.noun}</span>` : ''}
+      </div>
       <div class="annot-text">${a.text}</div>
-      ${(a.verb || a.noun) ? `<div class="annot-tags">${a.verb ? `<span class="tag-v">${a.verb}</span>` : ''}${a.noun ? `<span class="tag-n">${a.noun}</span>` : ''}</div>` : ''}
       ${hw ? `<div class="annot-howwhy">${hw.how ? `<span class="tag-how" title="how">↳ ${hw.how.text}</span>` : ''}${hw.why ? `<span class="tag-why" title="why">✦ ${hw.why.text}</span>` : ''}</div>` : ''}
     `;
+    el.querySelectorAll('.seek-btn').forEach(btn =>
+      btn.addEventListener('click', ev => { ev.stopPropagation(); if (vid.duration) vid.currentTime = parseFloat(btn.dataset.t); })
+    );
     el.addEventListener('click', () => {
       if (vid.duration) vid.currentTime = a.start;
     });
@@ -1779,17 +1806,23 @@ function makeResizable({ handle, target, dir, min = 60, sign = 1, key, onResize 
     dir: 'v', sign: -1, min: 80, key: 'rsz_video_slam',
     onResize: slamResize,
   });
-  // C: narrations|recipe — drag DOWN shrinks recipe (grows narrations)
+  // C: activities|steps — drag DOWN shrinks steps
   makeResizable({
-    handle: document.getElementById('rsz-nar-rec'),
-    target: document.getElementById('recipe-overview'),
-    dir: 'v', sign: -1, min: 40, key: 'rsz_nar_rec',
+    handle: document.getElementById('rsz-act-step'),
+    target: document.getElementById('steps-panel'),
+    dir: 'v', sign: -1, min: 40, key: 'rsz_act_step',
   });
-  // D: recipe|nutrition — drag DOWN shrinks nutrition
+  // D: steps|narrations — drag DOWN shrinks narrations-body
   makeResizable({
-    handle: document.getElementById('rsz-rec-nut'),
+    handle: document.getElementById('rsz-step-nar'),
+    target: document.getElementById('narrations-body'),
+    dir: 'v', sign: -1, min: 40, key: 'rsz_step_nar',
+  });
+  // E: narrations|nutrition — drag DOWN shrinks nutrition
+  makeResizable({
+    handle: document.getElementById('rsz-nar-nut'),
     target: document.getElementById('nutrition-panel'),
-    dir: 'v', sign: -1, min: 40, key: 'rsz_rec_nut',
+    dir: 'v', sign: -1, min: 40, key: 'rsz_nar_nut',
   });
   // E: nutrition|vqa — drag DOWN shrinks vqa
   makeResizable({
@@ -1917,6 +1950,7 @@ async function autoLoadDefaults() {
     if (currentVideoId) {
       activitySegments = allActivityData[currentVideoId] || [];
       buildTimeline();
+      renderActivitiesPanel();
     }
   } catch (err) {
     console.warn('auto-load activity timestamps failed:', err);
@@ -2116,6 +2150,7 @@ _slamToggleBtn.addEventListener('click', () => {
 
 // hide video initially
 vid.style.display = 'none';
-renderRecipeOverview(null);
+renderActivitiesPanel();
+renderStepsPanel();
 renderNutritionPanel();
 autoLoadDefaults();
