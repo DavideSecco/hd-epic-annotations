@@ -164,7 +164,8 @@
 
   /* --- Annotation panel --- */
   #annot-panel { flex: 1; min-width: 200px; width: auto; display: flex; flex-direction: column; background: #141414; min-height: 0; }
-  #annot-header { padding: 10px 14px; border-bottom: 1px solid #2a2a2a; font-size: 12px; color: #888; font-weight: 500; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  #annot-header { padding: 6px 14px; border-bottom: 1px solid #2a2a2a; font-size: 12px; color: #888; font-weight: 500; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  #annot-header #search { flex: 1; min-width: 0; height: 22px; padding: 2px 8px; font-size: 11px; margin: 0; width: auto; }
 
   /* Section toggle button */
   .sec-toggle { background: none; border: none; color: #555; cursor: pointer; font-size: 11px; padding: 0 2px; line-height: 1; transition: transform 0.15s; }
@@ -175,21 +176,18 @@
   #narrations-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
   #narrations-body.sec-collapsed { flex: 0 0 0; }
 
-  /* When narrations collapsed → recipe expands */
-  #narrations-body.sec-collapsed ~ #recipe-overview { flex: 1; max-height: none; }
+  /* When narrations collapsed → steps/activities can expand */
+  #narrations-body.sec-collapsed { flex: 0 0 auto; }
+  #narrations-body.sec-collapsed #annot-list { display: none; }
 
   #annot-list {
-    --caption-size-base: clamp(0.95rem, 1.05vw, 1.25rem);
-    --caption-size-active: clamp(1.2rem, 1.55vw, 1.65rem);
-    --tag-size-base: 0.62em;
-    --tag-size-active: 0.74em;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     scroll-behavior: smooth;
   }
-  #recipe-overview {
-    flex: 0 0 var(--rsz-h, 30%);
+  #activities-panel, #steps-panel {
+    flex: 0 0 var(--rsz-h, 22%);
     min-height: 0;
     overflow-y: auto;
     padding: 0;
@@ -197,67 +195,51 @@
     font-size: 13px;
     color: #aaa;
   }
-  #recipe-overview.sec-collapsed { flex: 0 0 auto; overflow: hidden; }
-  #recipe-overview.sec-collapsed .sec-body { display: none; }
-  #recipe-overview .sec-body { padding: 10px 14px 14px; }
+  #activities-panel.sec-collapsed, #steps-panel.sec-collapsed { flex: 0 0 auto; overflow: hidden; }
+  #activities-panel.sec-collapsed .sec-body, #steps-panel.sec-collapsed .sec-body { display: none; }
+  #activities-panel .sec-body, #steps-panel .sec-body { padding: 10px 14px 14px; }
   .sec-header-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; position: sticky; top: 0; background: #0f0f0f; border-bottom: 1px solid #1e1e1e; }
   .sec-label { font-size: 12px; font-weight: 600; color: #ccc; }
-  #recipe-overview h2 {
+  /* timeline-item: shared by activities and steps lists */
+  .timeline-item { transition: background 0.12s; border-radius: 3px; padding: 4px 2px; margin-bottom: 4px; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .timeline-item.active, .annot-item.active { background: #1a2a1a; border-left: 3px solid #4ade80; }
+  .timeline-item.active { padding-left: 6px; }
+  .timeline-item.active .recipe-item-time .seek-btn { border-color: #4ade80; color: #4ade80; }
+  .act-label { flex: 1; min-width: 0; color: #aaa; font-size: 13px; }
+  .step-type-badge { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; background: #0ea5e9; color: #fff; border-radius: 3px; padding: 0 4px; margin-right: 4px; line-height: 1.6; }
+  .step-badge-step { background: #3b82f6; }
+  .act-recipe-info { font-size: 11px; color: #666; margin-bottom: 8px; }
+  .act-recipe-info a { color: #60a5fa; text-decoration: none; }
+  .act-recipe-info a:hover { text-decoration: underline; }
+  #activities-panel h2 {
     margin: 0 0 8px;
     color: #f5f5f5;
     font-size: 14px;
     font-weight: 600;
     line-height: 1.25;
   }
-  #recipe-overview .recipe-source {
-    margin-bottom: 8px;
-    color: #8fb3ff;
-    word-break: break-word;
-  }
-  #recipe-overview .recipe-source a {
-    color: #6f95e6;
-    text-decoration: none;
-  }
-  #recipe-overview .recipe-source a:hover {
-    text-decoration: underline;
-  }
-  #recipe-overview ol {
-    margin-left: 18px;
-    padding-top: 4px;
-  }
-  #recipe-overview li {
-    margin-bottom: 6px;
-    line-height: 1.4;
-    font-size: 13px;
-  }
-  #recipe-overview .recipe-empty {
-    color: #666;
-  }
+  #activities-panel ol, #steps-panel ol { margin-left: 18px; padding-top: 4px; }
+  #activities-panel li, #steps-panel li { margin-bottom: 8px; line-height: 1.4; font-size: 13px; }
+  .recipe-empty { color: #666; }
+  .recipe-item-time { display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: nowrap; font-family: monospace; font-size: 10px; }
+  .recipe-item-dur { color: #4b5563; font-size: 10px; font-family: monospace; }
   .annot-item {
-    font-size: var(--caption-size-base);
-    padding: 8px 14px;
-    border-bottom: 1px solid #1e1e1e;
+    font-size: 13px;
+    padding: 5px 14px;
     cursor: pointer;
-    transition: background 0.15s, transform 0.15s;
+    transition: background 0.12s;
   }
   .annot-item:hover { background: #1e1e1e; }
-  .annot-item.active {
-    font-size: var(--caption-size-active);
-    background: #1e2a1e;
-    border-left: 3px solid #4ade80;
-    padding-left: 11px;
-    transform: scale(1.01);
+  .annot-item.active { padding-left: 11px; }
+  .annot-item.active .annot-meta .seek-btn { border-color: #4ade80; color: #4ade80; }
+  .annot-meta {
+    display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    font-family: monospace; font-size: 0.72em; color: #6b7280;
+    margin-bottom: 2px; font-variant-numeric: tabular-nums;
   }
-  .annot-item.active .annot-text { color: #b6f7c6; font-weight: 600; }
-  .annot-time {
-    font-size: 0.72em;
-    color: #6f6f6f;
-    opacity: 0.82;
-    margin-bottom: 0.35em;
-    font-variant-numeric: tabular-nums;
-    line-height: 1.25;
-    overflow-wrap: anywhere;
-  }
+  .seek-btn { background: none; border: 1px solid #4b5563; color: #9ca3af; border-radius: 3px; padding: 0 5px; cursor: pointer; font-size: 10px; font-family: monospace; line-height: 1.6; flex-shrink: 0; white-space: nowrap; }
+  .seek-btn:hover { background: #374151; color: #e5e7eb; border-color: #6b7280; }
+  .annot-dur { color: #4b5563; font-size: 0.9em; }
   .annot-text {
     font-size: 1em;
     color: #ccc;
@@ -265,11 +247,8 @@
     overflow-wrap: anywhere;
   }
   .annot-spacer { width: 100%; pointer-events: none; }
-  .annot-tags { margin-top: 6px; }
-  .tag-v { display: inline-block; background: #1a2e20; color: #4ade80; border-radius: 4px; padding: 0.18em 0.58em; font-size: var(--tag-size-base); line-height: 1.2; margin-right: 5px; }
-  .tag-n { display: inline-block; background: #1a2038; color: #60a5fa; border-radius: 4px; padding: 0.18em 0.58em; font-size: var(--tag-size-base); line-height: 1.2; }
-  .annot-item.active .tag-v,
-  .annot-item.active .tag-n { font-size: var(--tag-size-active); }
+  .tag-v { display: inline-block; background: #1a2e20; color: #4ade80; border-radius: 4px; padding: 0.18em 0.58em; font-size: 10px; line-height: 1.2; }
+  .tag-n { display: inline-block; background: #1a2038; color: #60a5fa; border-radius: 4px; padding: 0.18em 0.58em; font-size: 10px; line-height: 1.2; }
   .annot-howwhy { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px; }
   .tag-how { display: inline-block; background: #2a1f10; color: #fb923c; border-radius: 4px; padding: 0.15em 0.5em; font-size: 10px; line-height: 1.3; max-width: 100%; }
   .tag-why { display: inline-block; background: #1e1a2e; color: #c084fc; border-radius: 4px; padding: 0.15em 0.5em; font-size: 10px; line-height: 1.3; max-width: 100%; }
@@ -356,37 +335,21 @@
   .vqa-fullvideo { color: #555; font-style: italic; }
   .vqa-fullvideo-card { opacity: 0.75; }
 
-  /* --- Search --- */
-  #step-context {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    padding: 8px 14px;
-    border-bottom: 2px solid #3b82f6;
-    background: #141414;
-    color: #dbeafe;
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 1.4;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .ctx-act, .ctx-step { display: flex; align-items: baseline; gap: 6px; }
-  .ctx-dot { width: 7px; height: 7px; border-radius: 1px; flex-shrink: 0; position: relative; top: 0px; display: inline-block; }
-  .ctx-lbl { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.6; white-space: nowrap; flex-shrink: 0; }
-  .ctx-act { color: #d8b4fe; }
-  .ctx-step { color: #bfdbfe; }
-  .ctx-empty { color: #555; font-weight: 400; font-size: 12px; }
-  #search-wrap { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; }
-  #search { width: 100%; padding: 5px 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 6px; color: #eee; font-size: 12px; }
+  /* --- Search (inline in #annot-header) --- */
+  #search { padding: 5px 10px; background: #1e1e1e; border: 1px solid #333; border-radius: 4px; color: #eee; font-size: 12px; box-sizing: border-box; }
   #search::placeholder { color: #555; }
   #search:focus { outline: none; border-color: #555; }
 
-  /* Scrollbar */
-  #annot-list::-webkit-scrollbar { width: 4px; }
-  #annot-list::-webkit-scrollbar-track { background: transparent; }
-  #annot-list::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+  /* Scrollbar — shared across all three annotation panels */
+  #annot-list::-webkit-scrollbar,
+  #activities-panel::-webkit-scrollbar,
+  #steps-panel::-webkit-scrollbar { width: 4px; }
+  #annot-list::-webkit-scrollbar-track,
+  #activities-panel::-webkit-scrollbar-track,
+  #steps-panel::-webkit-scrollbar-track { background: transparent; }
+  #annot-list::-webkit-scrollbar-thumb,
+  #activities-panel::-webkit-scrollbar-thumb,
+  #steps-panel::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
 
   @media (max-width: 1100px) {
     #video-panel { flex-basis: 50%; }
@@ -405,5 +368,5 @@
   .resize-handle.h-h { width: 4px; cursor: col-resize; }
   /* hide handle when adjacent (paired) panel is hidden */
   body.no-slam #rsz-video-slam { display: none; }
-  #annot-panel:not(:has(#nutrition-panel.has-nutrition)) #rsz-rec-nut { display: none; }
+  #annot-panel:not(:has(#nutrition-panel.has-nutrition)) #rsz-nar-nut { display: none; }
   #annot-panel:not(:has(#vqa-panel.has-questions)) #rsz-nut-vqa { display: none; }
