@@ -328,6 +328,16 @@
   .vqa-count-chip { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; font-variant-numeric: tabular-nums; cursor: pointer; user-select: none; transition: opacity 0.12s, filter 0.12s; flex-shrink: 0; }
   .vqa-count-chip:hover { filter: brightness(1.15); }
   .vqa-count-chip[data-off] { opacity: 0.32; filter: grayscale(1); }
+  .vqa-show-correct-btn, .vqa-reveal-btn { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 10px; border: 1px solid #374151; background: #1a1a1a; color: #6b7280; cursor: pointer; flex-shrink: 0; }
+  .vqa-show-correct-btn { margin-left: auto; }
+  .vqa-show-correct-btn:hover, .vqa-reveal-btn:hover { border-color: #6b7280; color: #9ca3af; }
+  .vqa-show-correct-btn.active, .vqa-reveal-btn.active { background: #0d2016; border-color: #4ade80; color: #4ade80; }
+  .vqa-spoiler-off .vqa-choice.correct { color: #666; background: #1a1a1a; font-weight: normal; }
+  .vqa-spoiler-off .vqa-correct-mark { display: none; }
+  .vqa-spoiler-off .vqa-overridden .vqa-choice.correct { color: #4ade80; background: #0d2016; font-weight: 600; }
+  .vqa-spoiler-off .vqa-overridden .vqa-correct-mark { display: inline; }
+  #vqa-panel:not(.vqa-spoiler-off) .vqa-overridden .vqa-choice.correct { color: #666; background: #1a1a1a; font-weight: normal; }
+  #vqa-panel:not(.vqa-spoiler-off) .vqa-overridden .vqa-correct-mark { display: none; }
   .vqa-card.vqa-cat-hidden { display: none; }
   .vqa-card { padding: 7px 14px; border-bottom: 1px solid #1a1a1a; cursor: pointer; }
   .vqa-card:hover { background: #161616; }

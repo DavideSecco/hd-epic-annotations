@@ -458,12 +458,24 @@ function cleanVqaText(s) {
 
 const vqaPanel = document.getElementById('vqa-panel');
 let _vqaSorted = [];
+const VQA_SHOW_CORRECT_KEY = 'vqaShowCorrect';
+let _vqaShowCorrect = localStorage.getItem(VQA_SHOW_CORRECT_KEY) === '1';
+let _vqaOverridden = new Set();
 const _vqaHiddenStored = localStorage.getItem('vqaHiddenCats');
 const _vqaHidden = new Set(
   _vqaHiddenStored === null
     ? Object.keys(VQA_CATEGORIES)
     : JSON.parse(_vqaHiddenStored)
 );
+
+function applyVqaCorrectState() {
+  _vqaOverridden.clear();
+  vqaPanel.querySelectorAll('.vqa-card.vqa-overridden').forEach(c => c.classList.remove('vqa-overridden'));
+  vqaPanel.querySelectorAll('.vqa-reveal-btn').forEach(b => b.classList.toggle('active', _vqaShowCorrect));
+  vqaPanel.classList.toggle('vqa-spoiler-off', !_vqaShowCorrect);
+  const globalBtn = vqaPanel.querySelector('.vqa-show-correct-btn');
+  if (globalBtn) globalBtn.classList.toggle('active', _vqaShowCorrect);
+}
 
 function applyVqaFilter() {
   vqaPanel.querySelectorAll('.vqa-count-chip').forEach(chip => {
@@ -484,6 +496,7 @@ function toggleVqaCategory(cat) {
 
 function renderVqaList(videoId) {
   _vqaSorted = [];
+  _vqaOverridden.clear();
   const entries = vqaLookup[videoId];
   if (!entries || !entries.length) {
     vqaPanel.innerHTML = '';
@@ -526,12 +539,13 @@ function renderVqaList(videoId) {
       const text = Array.isArray(c)
         ? c.map((x, k) => `<span class="vqa-ord-item">${k+1}. ${cleanVqaText(x)}</span>`).join('')
         : cleanVqaText(c);
-      return `<div class="vqa-choice${j === e.correct ? ' correct' : ''}">${j === e.correct ? '✓ ' : `<span class="vqa-idx">${String.fromCharCode(65+j)}</span> `}${text}</div>`;
+      return `<div class="vqa-choice${j === e.correct ? ' correct' : ''}"><span class="vqa-idx">${String.fromCharCode(65+j)}</span>${j === e.correct ? ' <span class="vqa-correct-mark">✓</span>' : ''} ${text}</div>`;
     }).join('');
     return `<div class="vqa-card${noTime ? ' vqa-fullvideo-card' : ''}" data-idx="${i}" data-cat="${e.category}" data-start="${e.startS}" data-end="${e.endS}">
       <div class="vqa-card-meta">
         <span class="vqa-badge" style="background:${cat.color};color:${cat.text}">${cat.label}</span>
         ${windowHtml}
+        <button class="vqa-reveal-btn${(_vqaShowCorrect !== _vqaOverridden.has(i)) ? ' active' : ''}" data-idx="${i}">👁 Answer</button>
       </div>
       <div class="vqa-q">${cleanVqaText(e.question)}</div>
       <div class="vqa-choices">${choicesHtml}</div>
@@ -539,7 +553,7 @@ function renderVqaList(videoId) {
   }).join('');
 
   vqaPanel.innerHTML =
-    `<div class="sec-header-row"><span class="sec-label">VQA · ${_vqaSorted.length} question${_vqaSorted.length > 1 ? 's' : ''}</span><button class="sec-toggle" data-sec="vqa">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-header-row"><span class="sec-label">VQA · ${_vqaSorted.length} question${_vqaSorted.length > 1 ? 's' : ''}</span><button class="vqa-show-correct-btn${_vqaShowCorrect ? ' active' : ''}">👁 Answers</button><button class="sec-toggle" data-sec="vqa">${collapsed ? '▸' : '▾'}</button></div>` +
     `<div class="sec-body"><div class="vqa-counts">${countChips}</div>${cards}</div>`;
   vqaPanel.classList.add('has-questions');
   vqaPanel.classList.toggle('sec-collapsed', collapsed);
@@ -570,6 +584,31 @@ function renderVqaList(videoId) {
 
   _wireLoopBtns(vqaPanel);
   applyVqaFilter();
+
+  vqaPanel.querySelectorAll('.vqa-reveal-btn').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const idx = parseInt(btn.dataset.idx);
+      const card = btn.closest('.vqa-card');
+      if (_vqaOverridden.has(idx)) {
+        _vqaOverridden.delete(idx);
+        card.classList.remove('vqa-overridden');
+      } else {
+        _vqaOverridden.add(idx);
+        card.classList.add('vqa-overridden');
+      }
+      btn.classList.toggle('active', _vqaShowCorrect !== _vqaOverridden.has(idx));
+    });
+  });
+  applyVqaCorrectState();
+
+  const correctBtn = vqaPanel.querySelector('.vqa-show-correct-btn');
+  if (correctBtn) correctBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    _vqaShowCorrect = !_vqaShowCorrect;
+    localStorage.setItem(VQA_SHOW_CORRECT_KEY, _vqaShowCorrect ? '1' : '0');
+    applyVqaCorrectState();
+  });
 }
 
 function renderVqaPanel(t) {
