@@ -20,6 +20,7 @@ const timeMsOverlay = document.getElementById('time-ms-overlay');
 const actPosLine  = Object.assign(document.createElement('li'),  {className: 'pos-line'});
 const stepPosLine = Object.assign(document.createElement('li'),  {className: 'pos-line'});
 const narrPosLine = Object.assign(document.createElement('div'), {className: 'pos-line'});
+const objPosLine  = Object.assign(document.createElement('li'),  {className: 'pos-line'});
 const _posLineAfter = new WeakMap();
 
 function _insertPosLine(posLine, items, t, container) {
@@ -76,6 +77,7 @@ let youtubeUrls = {};
 let howWhyLookup = {};
 let allActivityData = {};
 let activitySegments = [];
+let objectSegments = [];
 let vqaLookup = {};
 let rawRecipesJson = null;
 let currentRecipeMeta = null;
@@ -84,6 +86,7 @@ let nutritionRecipeTotals = null;
 let _lastNutritionAdded = -1;
 let _actSearch = '';
 let _stepSearch = '';
+let _objSearch = '';
 let _loopSegment = null;
 
 let pyodide = null;
@@ -216,6 +219,7 @@ function detectColumns(rows) {
     verb:  find('verb','verbs','verb_class'),
     noun:  find('noun','nouns','noun_class'),
     id:    find('narration_id','action_id','id'),
+    hands: find('hands'),
   };
 }
 
@@ -223,6 +227,30 @@ function normalizeTags(value) {
   if (Array.isArray(value)) return value.map(v => String(v)).join(', ');
   if (value == null) return '';
   return String(value);
+}
+
+function parseHandsBadge(value) {
+  if (!value) return '';
+  const s = Array.isArray(value) ? value.join(' ') : String(value).toLowerCase();
+  const hasL = s.includes('left');
+  const hasR = s.includes('right');
+  const hasB = s.includes('both');
+  if (hasB || (hasL && hasR)) return 'L+R';
+  if (hasL) return 'L';
+  if (hasR) return 'R';
+  return '';
+}
+
+function buildObjectSegments(videoId) {
+  const objs = (allAssocData || {})[videoId] || {};
+  const segs = [];
+  for (const obj of Object.values(objs)) {
+    for (const track of (obj.tracks || [])) {
+      const [s, e] = track.time_segment || [];
+      if (s != null && e != null && !obj.name.includes('(skipped)')) segs.push({ name: obj.name, start: s, stop: e });
+    }
+  }
+  return segs.sort((a, b) => a.start - b.start);
 }
 
 function normalizeKey(key) {
@@ -269,6 +297,8 @@ function applySectionState(name) {
     document.getElementById('vqa-panel').classList.toggle('sec-collapsed', collapsed);
   } else if (name === 'nutrition') {
     document.getElementById('nutrition-panel').classList.toggle('sec-collapsed', collapsed);
+  } else if (name === 'objects') {
+    document.getElementById('objects-panel').classList.toggle('sec-collapsed', collapsed);
   }
   document.querySelectorAll(`.sec-toggle[data-sec="${name}"]`).forEach(btn => {
     btn.textContent = collapsed ? '▸' : '▾';
@@ -287,7 +317,7 @@ document.querySelector('.sec-toggle[data-sec="narrations"]')
   .addEventListener('click', () => toggleSection('narrations'));
 
 // Apply saved states on load
-['activities', 'steps', 'narrations', 'nutrition', 'vqa'].forEach(applySectionState);
+['activities', 'steps', 'narrations', 'objects', 'nutrition', 'vqa'].forEach(applySectionState);
 
 function refreshStatus() {
   if (!allAnnotations.length && !allAudioAnnotations.length && !rawRecipesJson) {
@@ -796,9 +826,11 @@ function applyVideoFilter() {
     activeIdx = -1;
     nutritionTimeline = [];
     nutritionRecipeTotals = null;
+    objectSegments = [];
     renderList(filteredAnnotations);
     renderActivitiesPanel();
     renderStepsPanel();
+    renderObjectsPanel();
     renderNutritionPanel();
     renderAudioHud(0);
     buildTimeline();
@@ -839,16 +871,19 @@ function applyVideoFilter() {
 
   filteredAnnotations = annotations;
   activeIdx = -1;
+  objectSegments = buildObjectSegments(currentVideoId);
   buildMaskLookup(currentVideoId);
   loadHandMasks(currentVideoId);  // async, non-blocking
   renderList(filteredAnnotations);
   renderActivitiesPanel();
   renderStepsPanel();
+  renderObjectsPanel();
   renderNutritionPanel();
   renderAudioHud(vid.currentTime || 0);
   renderMaskBoxes(vid.currentTime || 0);
   highlightActiveActivity(vid.currentTime || 0);
   highlightActiveStep(vid.currentTime || 0);
+  highlightActiveObject(vid.currentTime || 0);
   buildTimeline();
   clearCurrentAnnotation();
   refreshStatus();
@@ -1027,6 +1062,7 @@ function processRows(rows) {
     verb: cols.verb ? normalizeTags(r[cols.verb]) : '',
     noun: cols.noun ? normalizeTags(r[cols.noun]) : '',
     id: cols.id ? String(r[cols.id] || '') : '',
+    hands: cols.hands ? parseHandsBadge(r[cols.hands]) : '',
   })).filter(a => a.video_id && (a.text !== '(no text)' || a.start > 0));
 
   applyVideoFilter();
@@ -1232,6 +1268,54 @@ function renderStepsPanel(steps = stepAnnotations) {
     ni.focus();
     ni.setSelectionRange(_stepSearch.length, _stepSearch.length);
   });
+}
+
+const objectsPanel = document.getElementById('objects-panel');
+
+function renderObjectsPanel(segs = objectSegments) {
+  const collapsed = !!_secState['objects'];
+  const listHtml = objectSegments.length === 0
+    ? '<div class="recipe-empty">No object data for this video</div>'
+    : segs.length === 0
+      ? '<div class="recipe-empty">No matching objects</div>'
+      : `<ol>${segs.map(seg => {
+          const dur = (seg.stop - seg.start).toFixed(1);
+          return `<li class="timeline-item" data-start="${seg.start}" data-end="${seg.stop}"><div class="recipe-item-time">${_seekBtnHtml(seg.start)} → ${_seekBtnHtml(seg.stop)} ${_loopBtnHtml(seg.start, seg.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="tag-obj-name">${seg.name}</span></li>`;
+        }).join('')}</ol>`;
+  objectsPanel.innerHTML =
+    `<div class="sec-header-row"><span class="sec-label">Objects</span><input class="panel-search" placeholder="Search objects…"><button class="sec-toggle" data-sec="objects">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-body">${listHtml}</div>`;
+  objectsPanel.classList.toggle('sec-collapsed', collapsed);
+  objectsPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('objects'));
+  _wireSeekers(objectsPanel);
+  _wireLoopBtns(objectsPanel);
+  _hidePosLine(objPosLine);
+  const objSrch = objectsPanel.querySelector('.panel-search');
+  objSrch.value = _objSearch;
+  objSrch.addEventListener('input', () => {
+    _objSearch = objSrch.value;
+    const q = _objSearch.trim().toLowerCase();
+    renderObjectsPanel(q ? objectSegments.filter(s => s.name.toLowerCase().includes(q)) : objectSegments);
+    const ni = objectsPanel.querySelector('.panel-search');
+    ni.focus();
+    ni.setSelectionRange(_objSearch.length, _objSearch.length);
+  });
+}
+
+function highlightActiveObject(t) {
+  let active = null;
+  objectsPanel.querySelectorAll('.timeline-item').forEach(item => {
+    const s = parseFloat(item.dataset.start), e = parseFloat(item.dataset.end);
+    const isActive = s <= t && e >= t;
+    item.classList.toggle('active', isActive);
+    if (isActive) active = item;
+  });
+  if (active) {
+    _hidePosLine(objPosLine);
+    scrollActiveItemToCenter(active, objectsPanel);
+  } else {
+    _hidePosLine(objPosLine);
+  }
 }
 
 function highlightActiveActivity(t) {
@@ -1494,7 +1578,7 @@ document.getElementById('video-input').addEventListener('change', e => {
   document.getElementById('video-name').textContent = file.name;
   currentVideoId = extractVideoId(file.name);
   activitySegments = allActivityData[currentVideoId] || [];
-  _actSearch = ''; _stepSearch = ''; _clearLoop();
+  _actSearch = ''; _stepSearch = ''; _objSearch = ''; _clearLoop();
   updateYoutubeButton();
   renderVqaList(currentVideoId);
   dropHint.style.display = 'none';
@@ -1568,7 +1652,7 @@ function buildTimeline() {
 
   const maxStop = mergedAnnotations.reduce((maxVal, a) => Math.max(maxVal, a.stop || 0), 0);
   const dur = vid.duration || maxStop || 1;
-  timelineSvg.setAttribute('viewBox', `0 0 1000 38`);
+  timelineSvg.setAttribute('viewBox', `0 0 1000 48`);
 
   // Activity lane (top, thin, purple)
   activitySegments.forEach(a => {
@@ -1599,7 +1683,7 @@ function buildTimeline() {
     const x = (a.start / dur) * 1000;
     const w = Math.max(2, ((a.stop - a.start) / dur) * 1000);
     const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
-    const y = (a.type === 'step' || a.type === 'prep') ? 8 : (a.type === 'narration' ? 19 : 29);
+    const y = (a.type === 'step' || a.type === 'prep') ? 8 : (a.type === 'narration' ? 19 : 39);
     const fill = a.type === 'step' ? '#3b82f6'
       : (a.type === 'prep' ? '#0ea5e9' : (a.type === 'narration' ? '#2a5' : '#f5a623'));
     const opacity = (a.type === 'step' || a.type === 'prep') ? '0.75' : '0.58';
@@ -1609,6 +1693,17 @@ function buildTimeline() {
     rect.setAttribute('height', 8);
     rect.setAttribute('fill', fill);
     rect.setAttribute('opacity', opacity);
+    rect.setAttribute('rx', '1');
+    timelineSvg.appendChild(rect);
+  });
+
+  objectSegments.forEach(seg => {
+    const x = (seg.start / dur) * 1000;
+    const w = Math.max(2, ((seg.stop - seg.start) / dur) * 1000);
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x); rect.setAttribute('y', 29);
+    rect.setAttribute('width', w); rect.setAttribute('height', 8);
+    rect.setAttribute('fill', '#14b8a6'); rect.setAttribute('opacity', '0.65');
     rect.setAttribute('rx', '1');
     timelineSvg.appendChild(rect);
   });
@@ -1634,6 +1729,7 @@ vid.addEventListener('timeupdate', () => {
   }
   highlightActiveActivity(t);
   highlightActiveStep(t);
+  highlightActiveObject(t);
   renderNutritionTracker(t);
   renderVqaPanel(t);
   highlightActive(t);
@@ -1876,7 +1972,7 @@ function renderList(annots) {
         <button class="seek-btn" data-t="${tStop}">${fmtTime(tStop, true)}</button>
         ${_loopBtnHtml(tStart, tStop)}
         <span class="annot-dur">+${dur}s</span>
-        ${a.verb ? `<span class="tag-v">${a.verb}</span>` : ''}${a.noun ? `<span class="tag-n">${a.noun}</span>` : ''}
+        ${a.verb ? `<span class="tag-v">${a.verb}</span>` : ''}${a.noun ? `<span class="tag-n">${a.noun}</span>` : ''}${a.hands ? `<span class="tag-hands" title="hands used">🤚 ${a.hands}</span>` : ''}
       </div>
       <div class="annot-text">${a.text}</div>
       ${hw ? `<div class="annot-howwhy">${hw.how ? `<span class="tag-how" title="how">↳ ${hw.how.text}</span>` : ''}${hw.why ? `<span class="tag-why" title="why">✦ ${hw.why.text}</span>` : ''}</div>` : ''}
@@ -1990,7 +2086,13 @@ function makeResizable({ handle, target, dir, min = 60, sign = 1, key, onResize 
     target: document.getElementById('steps-panel'),
     dir: 'v', sign: 1, min: 40, key: 'rsz_step_nar',
   });
-  // E: narrations|nutrition — drag DOWN shrinks nutrition
+  // E: narrations|objects — drag DOWN shrinks objects
+  makeResizable({
+    handle: document.getElementById('rsz-nar-obj'),
+    target: document.getElementById('objects-panel'),
+    dir: 'v', sign: -1, min: 40, key: 'rsz_nar_obj',
+  });
+  // F: objects|nutrition — drag DOWN shrinks nutrition
   makeResizable({
     handle: document.getElementById('rsz-nar-nut'),
     target: document.getElementById('nutrition-panel'),
