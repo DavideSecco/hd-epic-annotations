@@ -58,10 +58,13 @@
     z-index: 3;
   }
   #audio-hud:empty { display: none; }
-  #time-ms-overlay {
+  #video-top-left {
     position: absolute;
-    left: 6px;
-    top: 6px;
+    top: 6px; left: 6px;
+    display: flex; align-items: center; gap: 6px;
+    z-index: 4; pointer-events: none;
+  }
+  #time-ms-overlay {
     font-size: 18px;
     font-family: monospace;
     color: rgba(255,255,255,0.8);
@@ -69,7 +72,6 @@
     border-radius: 3px;
     padding: 1px 4px;
     pointer-events: none;
-    z-index: 4;
     letter-spacing: 0.04em;
   }
   .audio-box {
@@ -247,6 +249,13 @@
   }
   .seek-btn { background: none; border: 1px solid #4b5563; color: #9ca3af; border-radius: 3px; padding: 0 5px; cursor: pointer; font-size: 10px; font-family: monospace; line-height: 1.6; flex-shrink: 0; white-space: nowrap; }
   .seek-btn:hover { background: #374151; color: #e5e7eb; border-color: #6b7280; }
+  .loop-btn { background: none; border: 1px solid #4b5563; color: #9ca3af; border-radius: 3px; padding: 0 5px; cursor: pointer; font-size: 11px; line-height: 1.6; flex-shrink: 0; }
+  .loop-btn:hover { background: #374151; color: #e5e7eb; border-color: #6b7280; }
+  .loop-btn.active { background: #1a3a2a; border-color: #4ade80; color: #4ade80; }
+  #loop-indicator { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; font-family: monospace; color: rgba(74,222,128,0.9); background: rgba(0,0,0,0.45); border-radius: 3px; padding: 1px 6px; pointer-events: auto; white-space: nowrap; }
+  #loop-indicator[hidden] { display: none; }
+  #loop-stop { background: none; border: none; color: rgba(74,222,128,0.7); cursor: pointer; font-size: 13px; padding: 0; line-height: 1; }
+  #loop-stop:hover { color: #4ade80; }
   .annot-dur { color: #4b5563; font-size: 0.9em; }
   .annot-text {
     font-size: 1em;

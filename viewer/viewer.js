@@ -84,6 +84,7 @@ let nutritionRecipeTotals = null;
 let _lastNutritionAdded = -1;
 let _actSearch = '';
 let _stepSearch = '';
+let _loopSegment = null;
 
 let pyodide = null;
 let pyodideInitPromise = null;
@@ -520,7 +521,7 @@ function renderVqaList(videoId) {
     const noTime = e.startS === 0 && e.endS === 0;
     const windowHtml = noTime
       ? '<span class="vqa-window vqa-fullvideo">full video</span>'
-      : `<span class="vqa-window"><button class="vqa-time-btn" data-t="${e.startS}">${fmtTime(e.startS, true)}</button> → <button class="vqa-time-btn" data-t="${e.endS}">${fmtTime(e.endS, true)}</button> <span class="vqa-dur">+${dur}s</span></span>`;
+      : `<span class="vqa-window"><button class="vqa-time-btn" data-t="${e.startS}">${fmtTime(e.startS, true)}</button> → <button class="vqa-time-btn" data-t="${e.endS}">${fmtTime(e.endS, true)}</button> ${_loopBtnHtml(e.startS, e.endS)} <span class="vqa-dur">+${dur}s</span></span>`;
     const choicesHtml = e.choices.map((c, j) => {
       const text = Array.isArray(c)
         ? c.map((x, k) => `<span class="vqa-ord-item">${k+1}. ${cleanVqaText(x)}</span>`).join('')
@@ -561,11 +562,13 @@ function renderVqaList(videoId) {
   vqaPanel.querySelectorAll('.vqa-time-btn').forEach(btn => {
     btn.addEventListener('click', ev => {
       ev.stopPropagation();
+      _clearLoop();
       const t = parseFloat(btn.dataset.t);
       if (!isNaN(t) && vid.duration) vid.currentTime = t;
     });
   });
 
+  _wireLoopBtns(vqaPanel);
   applyVqaFilter();
 }
 
@@ -1076,9 +1079,53 @@ function _seekBtnHtml(t) {
   return `<button class="seek-btn" data-t="${t}">${fmtTime(t, true)}</button>`;
 }
 
+function _loopBtnHtml(start, end) {
+  if (!isFinite(end)) return '';
+  return `<button class="loop-btn" data-start="${start}" data-end="${end}" title="Loop this segment">⟳</button>`;
+}
+
+function _setLoop(start, end) {
+  _loopSegment = { start, end };
+  vid.currentTime = start;
+  vid.play();
+  _updateLoopUI();
+}
+
+function _clearLoop() {
+  _loopSegment = null;
+  _updateLoopUI();
+}
+
+function _updateLoopUI() {
+  const ind = document.getElementById('loop-indicator');
+  if (_loopSegment) {
+    ind.hidden = false;
+    const dur = (_loopSegment.end - _loopSegment.start).toFixed(1);
+    document.getElementById('loop-indicator-label').textContent =
+      `${fmtTime(_loopSegment.start, true)} → ${fmtTime(_loopSegment.end, true)} +${dur}s`;
+  } else {
+    ind.hidden = true;
+  }
+  document.querySelectorAll('.loop-btn').forEach(btn => {
+    const s = parseFloat(btn.dataset.start), e = parseFloat(btn.dataset.end);
+    btn.classList.toggle('active', !!_loopSegment && _loopSegment.start === s && _loopSegment.end === e);
+  });
+}
+
+function _wireLoopBtns(el) {
+  el.querySelectorAll('.loop-btn').forEach(btn => {
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const s = parseFloat(btn.dataset.start), e = parseFloat(btn.dataset.end);
+      (_loopSegment && _loopSegment.start === s && _loopSegment.end === e)
+        ? _clearLoop() : _setLoop(s, e);
+    });
+  });
+}
+
 function _wireSeekers(el) {
   el.querySelectorAll('.seek-btn').forEach(btn =>
-    btn.addEventListener('click', ev => { ev.stopPropagation(); if (vid.duration) vid.currentTime = parseFloat(btn.dataset.t); })
+    btn.addEventListener('click', ev => { ev.stopPropagation(); _clearLoop(); if (vid.duration) vid.currentTime = parseFloat(btn.dataset.t); })
   );
 }
 
@@ -1094,7 +1141,7 @@ function renderActivitiesPanel(segs = activitySegments) {
       : `<ol>${segs.map(a => {
           const endS = isNaN(a.end) ? vid.duration : a.end;
           const dur  = isFinite(endS) ? (endS - a.start).toFixed(1) : null;
-          const endPart = isFinite(endS) ? `→ ${_seekBtnHtml(endS)} <span class="recipe-item-dur">+${dur}s</span>` : '';
+          const endPart = isFinite(endS) ? `→ ${_seekBtnHtml(endS)} ${_loopBtnHtml(a.start, endS)} <span class="recipe-item-dur">+${dur}s</span>` : '';
           return `<li class="timeline-item" data-start="${a.start}" data-end="${a.end}"><div class="recipe-item-time">${_seekBtnHtml(a.start)} ${endPart}</div><span class="act-label">${a.label}</span></li>`;
         }).join('')}</ol>`;
   activitiesPanel.innerHTML =
@@ -1103,6 +1150,7 @@ function renderActivitiesPanel(segs = activitySegments) {
   activitiesPanel.classList.toggle('sec-collapsed', collapsed);
   activitiesPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('activities'));
   _wireSeekers(activitiesPanel);
+  _wireLoopBtns(activitiesPanel);
   _hidePosLine(actPosLine);
   const actSrch = activitiesPanel.querySelector('.panel-search');
   actSrch.value = _actSearch;
@@ -1125,7 +1173,7 @@ function renderStepsPanel(steps = stepAnnotations) {
       : `<ol>${steps.map(s => {
           const dur = (s.stop - s.start).toFixed(1);
           const badge = s.type === 'prep' ? '<span class="step-type-badge">prep</span>' : '<span class="step-type-badge step-badge-step">step</span>';
-          return `<li class="timeline-item" data-start="${s.start}" data-end="${s.stop}"><div class="recipe-item-time">${badge}${_seekBtnHtml(s.start)} → ${_seekBtnHtml(s.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="step-text">${s.text}</span></li>`;
+          return `<li class="timeline-item" data-start="${s.start}" data-end="${s.stop}"><div class="recipe-item-time">${badge}${_seekBtnHtml(s.start)} → ${_seekBtnHtml(s.stop)} ${_loopBtnHtml(s.start, s.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="step-text">${s.text}</span></li>`;
         }).join('')}</ol>`;
   stepsPanel.innerHTML =
     `<div class="sec-header-row"><span class="sec-label">Steps</span><input class="panel-search" placeholder="Search steps…"><button class="sec-toggle" data-sec="steps">${collapsed ? '▸' : '▾'}</button></div>` +
@@ -1133,6 +1181,7 @@ function renderStepsPanel(steps = stepAnnotations) {
   stepsPanel.classList.toggle('sec-collapsed', collapsed);
   stepsPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('steps'));
   _wireSeekers(stepsPanel);
+  _wireLoopBtns(stepsPanel);
   _hidePosLine(stepPosLine);
   const stepSrch = stepsPanel.querySelector('.panel-search');
   stepSrch.value = _stepSearch;
@@ -1406,7 +1455,7 @@ document.getElementById('video-input').addEventListener('change', e => {
   document.getElementById('video-name').textContent = file.name;
   currentVideoId = extractVideoId(file.name);
   activitySegments = allActivityData[currentVideoId] || [];
-  _actSearch = ''; _stepSearch = '';
+  _actSearch = ''; _stepSearch = ''; _clearLoop();
   updateYoutubeButton();
   renderVqaList(currentVideoId);
   dropHint.style.display = 'none';
@@ -1682,6 +1731,13 @@ function _updateGazeDot(tVideoS) {
 
 function _frameTick(_now, meta) {
   const t = meta ? meta.mediaTime : vid.currentTime;
+  if (_loopSegment && t >= _loopSegment.end) {
+    vid.currentTime = _loopSegment.start;
+    _maskRafId = _HAS_VFC
+      ? vid.requestVideoFrameCallback(_frameTick)
+      : requestAnimationFrame(_frameTick);
+    return;
+  }
   renderMaskBoxes(t);
   if (currentSlam) currentSlam.setTime(t);
   _updateGazeDot(t);
@@ -1705,13 +1761,14 @@ function _stopMaskRaf() {
 }
 vid.addEventListener('play',   _startMaskRaf);
 vid.addEventListener('pause',  () => { _stopMaskRaf(); renderMaskBoxes(vid.currentTime); });
-vid.addEventListener('ended',  _stopMaskRaf);
+vid.addEventListener('ended',  () => { _stopMaskRaf(); if (_loopSegment) { vid.currentTime = _loopSegment.start; vid.play(); } });
 vid.addEventListener('seeked', () => { if (!_maskRafId) renderMaskBoxes(vid.currentTime); });
 
 // Seek on timeline click
 timelineTrack.addEventListener('click', e => {
   const rect = timelineTrack.getBoundingClientRect();
   const pct = (e.clientX - rect.left) / rect.width;
+  _clearLoop();
   if (vid.duration) vid.currentTime = pct * vid.duration;
 });
 
@@ -1778,6 +1835,7 @@ function renderList(annots) {
         <button class="seek-btn" data-t="${tStart}">${fmtTime(tStart, true)}</button>
         →
         <button class="seek-btn" data-t="${tStop}">${fmtTime(tStop, true)}</button>
+        ${_loopBtnHtml(tStart, tStop)}
         <span class="annot-dur">+${dur}s</span>
         ${a.verb ? `<span class="tag-v">${a.verb}</span>` : ''}${a.noun ? `<span class="tag-n">${a.noun}</span>` : ''}
       </div>
@@ -1785,8 +1843,9 @@ function renderList(annots) {
       ${hw ? `<div class="annot-howwhy">${hw.how ? `<span class="tag-how" title="how">↳ ${hw.how.text}</span>` : ''}${hw.why ? `<span class="tag-why" title="why">✦ ${hw.why.text}</span>` : ''}</div>` : ''}
     `;
     el.querySelectorAll('.seek-btn').forEach(btn =>
-      btn.addEventListener('click', ev => { ev.stopPropagation(); if (vid.duration) vid.currentTime = parseFloat(btn.dataset.t); })
+      btn.addEventListener('click', ev => { ev.stopPropagation(); _clearLoop(); if (vid.duration) vid.currentTime = parseFloat(btn.dataset.t); })
     );
+    _wireLoopBtns(el);
     el.addEventListener('click', () => {
       if (vid.duration) vid.currentTime = a.start;
     });
@@ -2228,3 +2287,5 @@ renderActivitiesPanel();
 renderStepsPanel();
 renderNutritionPanel();
 autoLoadDefaults();
+
+document.getElementById('loop-stop').addEventListener('click', _clearLoop);
