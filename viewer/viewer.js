@@ -539,7 +539,7 @@ function renderVqaList(videoId) {
       const text = Array.isArray(c)
         ? c.map((x, k) => `<span class="vqa-ord-item">${k+1}. ${cleanVqaText(x)}</span>`).join('')
         : cleanVqaText(c);
-      return `<div class="vqa-choice${j === e.correct ? ' correct' : ''}"><span class="vqa-idx">${String.fromCharCode(65+j)}</span>${j === e.correct ? ' <span class="vqa-correct-mark">✓</span>' : ''} ${text}</div>`;
+      return `<div class="vqa-choice${j === e.correct ? ' correct' : ''}"><span class="vqa-idx">${String.fromCharCode(65+j)}</span>${j === e.correct ? '<span class="vqa-correct-mark"> ✓</span>' : ''}<span class="vqa-text">${text}</span></div>`;
     }).join('');
     return `<div class="vqa-card${noTime ? ' vqa-fullvideo-card' : ''}" data-idx="${i}" data-cat="${e.category}" data-start="${e.startS}" data-end="${e.endS}">
       <div class="vqa-card-meta">
