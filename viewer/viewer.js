@@ -82,6 +82,8 @@ let currentRecipeMeta = null;
 let nutritionTimeline = [];
 let nutritionRecipeTotals = null;
 let _lastNutritionAdded = -1;
+let _actSearch = '';
+let _stepSearch = '';
 
 let pyodide = null;
 let pyodideInitPromise = null;
@@ -1080,44 +1082,68 @@ function _wireSeekers(el) {
   );
 }
 
-function renderActivitiesPanel() {
+function renderActivitiesPanel(segs = activitySegments) {
   const collapsed = !!_secState['activities'];
   const recipeInline = currentRecipeMeta
     ? `<span class="act-recipe-info-inline">${currentRecipeMeta.name}${currentRecipeMeta.source ? ` · <a href="${currentRecipeMeta.source}" target="_blank" rel="noopener noreferrer">link</a>` : ''}</span>`
     : '';
-  const listHtml = activitySegments.length
-    ? `<ol>${activitySegments.map(a => {
-        const endS = isNaN(a.end) ? vid.duration : a.end;
-        const dur  = isFinite(endS) ? (endS - a.start).toFixed(1) : null;
-        const endPart = isFinite(endS) ? `→ ${_seekBtnHtml(endS)} <span class="recipe-item-dur">+${dur}s</span>` : '';
-        return `<li class="timeline-item" data-start="${a.start}" data-end="${a.end}"><div class="recipe-item-time">${_seekBtnHtml(a.start)} ${endPart}</div><span class="act-label">${a.label}</span></li>`;
-      }).join('')}</ol>`
-    : '<div class="recipe-empty">No activity data for this video</div>';
+  const listHtml = activitySegments.length === 0
+    ? '<div class="recipe-empty">No activity data for this video</div>'
+    : segs.length === 0
+      ? '<div class="recipe-empty">No matching activities</div>'
+      : `<ol>${segs.map(a => {
+          const endS = isNaN(a.end) ? vid.duration : a.end;
+          const dur  = isFinite(endS) ? (endS - a.start).toFixed(1) : null;
+          const endPart = isFinite(endS) ? `→ ${_seekBtnHtml(endS)} <span class="recipe-item-dur">+${dur}s</span>` : '';
+          return `<li class="timeline-item" data-start="${a.start}" data-end="${a.end}"><div class="recipe-item-time">${_seekBtnHtml(a.start)} ${endPart}</div><span class="act-label">${a.label}</span></li>`;
+        }).join('')}</ol>`;
   activitiesPanel.innerHTML =
-    `<div class="sec-header-row"><span class="sec-label">Activities</span>${recipeInline}<button class="sec-toggle" data-sec="activities">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-header-row"><span class="sec-label">Activities</span><input class="panel-search" placeholder="Search activities…"><button class="sec-toggle" data-sec="activities">${collapsed ? '▸' : '▾'}</button></div>` +
     `<div class="sec-body">${listHtml}</div>`;
   activitiesPanel.classList.toggle('sec-collapsed', collapsed);
   activitiesPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('activities'));
   _wireSeekers(activitiesPanel);
   _hidePosLine(actPosLine);
+  const actSrch = activitiesPanel.querySelector('.panel-search');
+  actSrch.value = _actSearch;
+  actSrch.addEventListener('input', () => {
+    _actSearch = actSrch.value;
+    const q = _actSearch.trim().toLowerCase();
+    renderActivitiesPanel(q ? activitySegments.filter(a => String(a.label || '').toLowerCase().includes(q)) : activitySegments);
+    const ni = activitiesPanel.querySelector('.panel-search');
+    ni.focus();
+    ni.setSelectionRange(_actSearch.length, _actSearch.length);
+  });
 }
 
-function renderStepsPanel() {
+function renderStepsPanel(steps = stepAnnotations) {
   const collapsed = !!_secState['steps'];
-  const listHtml = stepAnnotations.length
-    ? `<ol>${stepAnnotations.map(s => {
-        const dur = (s.stop - s.start).toFixed(1);
-        const badge = s.type === 'prep' ? '<span class="step-type-badge">prep</span>' : '<span class="step-type-badge step-badge-step">step</span>';
-        return `<li class="timeline-item" data-start="${s.start}" data-end="${s.stop}"><div class="recipe-item-time">${badge}${_seekBtnHtml(s.start)} → ${_seekBtnHtml(s.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="step-text">${s.text}</span></li>`;
-      }).join('')}</ol>`
-    : '<div class="recipe-empty">No steps for this video</div>';
+  const listHtml = stepAnnotations.length === 0
+    ? '<div class="recipe-empty">No steps for this video</div>'
+    : steps.length === 0
+      ? '<div class="recipe-empty">No matching steps</div>'
+      : `<ol>${steps.map(s => {
+          const dur = (s.stop - s.start).toFixed(1);
+          const badge = s.type === 'prep' ? '<span class="step-type-badge">prep</span>' : '<span class="step-type-badge step-badge-step">step</span>';
+          return `<li class="timeline-item" data-start="${s.start}" data-end="${s.stop}"><div class="recipe-item-time">${badge}${_seekBtnHtml(s.start)} → ${_seekBtnHtml(s.stop)} <span class="recipe-item-dur">+${dur}s</span></div><span class="step-text">${s.text}</span></li>`;
+        }).join('')}</ol>`;
   stepsPanel.innerHTML =
-    `<div class="sec-header-row"><span class="sec-label">Steps</span><button class="sec-toggle" data-sec="steps">${collapsed ? '▸' : '▾'}</button></div>` +
+    `<div class="sec-header-row"><span class="sec-label">Steps</span><input class="panel-search" placeholder="Search steps…"><button class="sec-toggle" data-sec="steps">${collapsed ? '▸' : '▾'}</button></div>` +
     `<div class="sec-body">${listHtml}</div>`;
   stepsPanel.classList.toggle('sec-collapsed', collapsed);
   stepsPanel.querySelector('.sec-toggle').addEventListener('click', () => toggleSection('steps'));
   _wireSeekers(stepsPanel);
   _hidePosLine(stepPosLine);
+  const stepSrch = stepsPanel.querySelector('.panel-search');
+  stepSrch.value = _stepSearch;
+  stepSrch.addEventListener('input', () => {
+    _stepSearch = stepSrch.value;
+    const q = _stepSearch.trim().toLowerCase();
+    renderStepsPanel(q ? stepAnnotations.filter(s => String(s.text || '').toLowerCase().includes(q)) : stepAnnotations);
+    const ni = stepsPanel.querySelector('.panel-search');
+    ni.focus();
+    ni.setSelectionRange(_stepSearch.length, _stepSearch.length);
+  });
 }
 
 function highlightActiveActivity(t) {
@@ -1380,6 +1406,7 @@ document.getElementById('video-input').addEventListener('change', e => {
   document.getElementById('video-name').textContent = file.name;
   currentVideoId = extractVideoId(file.name);
   activitySegments = allActivityData[currentVideoId] || [];
+  _actSearch = ''; _stepSearch = '';
   updateYoutubeButton();
   renderVqaList(currentVideoId);
   dropHint.style.display = 'none';
@@ -1400,6 +1427,7 @@ videoWrap.addEventListener('drop', e => {
     document.getElementById('video-name').textContent = file.name;
     currentVideoId = extractVideoId(file.name);
     activitySegments = allActivityData[currentVideoId] || [];
+    _actSearch = ''; _stepSearch = '';
     updateYoutubeButton();
     renderVqaList(currentVideoId);
     dropHint.style.display = 'none';
